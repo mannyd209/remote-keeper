@@ -154,6 +154,65 @@ func secondsSinceInput() -> Double {
         .min() ?? 999
 }
 
+/// Brings Claude to the front through Launch Services, which works from a background app (a
+/// plain activate() is often ignored on macOS 14 and later unless the caller is in front).
+func bringClaudeForward(opening url: URL? = nil) {
+    guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: claudeBundleID) else { return }
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = true
+    let done = DispatchSemaphore(value: 0)
+    if let url {
+        NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: configuration) { _, _ in done.signal() }
+    } else {
+        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, _ in done.signal() }
+    }
+    _ = done.wait(timeout: .now() + 10)
+    claudeApp()?.activate()
+}
+
+/// Finds the session's message box in Claude's front window and gives it focus.
+func focusMessageBox(_ pid: pid_t) -> Bool {
+    if messageBoxFocused(pid) { return true }
+    let app = AXUIElementCreateApplication(pid)
+    AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    var window: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success
+            || AXUIElementCopyAttributeValue(app, kAXMainWindowAttribute as CFString, &window) == .success,
+          let root = window else {
+        log("Focus: Claude has no front window")
+        return false
+    }
+    // The message box is an editable text area; there's normally one, at the bottom.
+    var boxes: [(AXUIElement, CGFloat)] = []
+    func walk(_ element: AXUIElement, depth: Int) {
+        guard depth < 40, boxes.count < 20 else { return }
+        var role: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+        if role as? String == "AXTextArea" {
+            var position: CFTypeRef?
+            var point = CGPoint.zero
+            if AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success, let position {
+                AXValueGetValue(position as! AXValue, .cgPoint, &point)
+            }
+            boxes.append((element, point.y))
+        }
+        var kids: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &kids) == .success,
+              let children = kids as? [AXUIElement] else { return }
+        for child in children { walk(child, depth: depth + 1) }
+    }
+    walk(root as! AXUIElement, depth: 0)
+    guard let box = boxes.max(by: { $0.1 < $1.1 })?.0 else {
+        log("Focus: no message box found in Claude's window")
+        return false
+    }
+    AXUIElementSetAttributeValue(box, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    usleep(300_000)
+    let ok = messageBoxFocused(pid)
+    log("Focus: set focus on the message box (\(ok ? "ok" : "still not focused"))")
+    return ok
+}
+
 /// True when Claude's focused element is a text box (the session's message box).
 func messageBoxFocused(_ pid: pid_t) -> Bool {
     let app = AXUIElementCreateApplication(pid)
@@ -209,69 +268,103 @@ func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
     while secondsSinceInput() < 8 && Date() < deadline { sleep(2) }
 
     if claudeApp() == nil {
-        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: claudeBundleID) {
-            NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
-        }
+        bringClaudeForward()
         for _ in 0..<30 where claudeApp() == nil { sleep(1) }
         guard claudeApp() != nil else { return .failure(.claudeNotRunning) }
         sleep(12)   // let it load its sessions
     }
     guard let app = claudeApp() else { return .failure(.claudeNotRunning) }
 
-    NSWorkspace.shared.open(URL(string: "claude://claude.ai/epitaxy/\(id)")!)
+    bringClaudeForward(opening: URL(string: "claude://claude.ai/epitaxy/\(id)")!)
     sleep(3)
-    app.activate()
     var focused = false
-    for _ in 0..<5 {
-        if messageBoxFocused(app.processIdentifier) { focused = true; break }
+    for attempt in 0..<6 {
+        if attempt == 3 { bringClaudeForward() }
+        if focusMessageBox(app.processIdentifier) { focused = true; break }
         sleep(1)
     }
-    guard focused else { return .failure(.noMessageBox) }
+    let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none"
+    guard focused else {
+        log("Wake \(id): no message box focus (front app: \(front), Claude active: \(app.isActive))")
+        return .failure(.noMessageBox)
+    }
     // Check again right before typing: /remote-control switches it off if it's already on.
     if RemoteControlStatus.now().isOn(session(id) ?? target) { return .success("\(target.title): Remote Control is already on.") }
 
     // 1. Claude's own /remote-control command: no Claude usage, and it also works when the
-    //    session's switch was turned off.
+    //    session's switch was turned off. It only works while the session's process is running.
+    let pid = app.processIdentifier
     let started = Date()
-    type(remoteControlCommand, into: app.processIdentifier, pressReturn: false)
-    usleep(700_000)
-    pressReturn(app.processIdentifier)
-    for attempt in 0..<16 {
-        sleep(1)
-        if attempt == 3, RemoteControlStatus.logEvents(since: started)[id] == nil {
-            pressReturn(app.processIdentifier)   // the first Return only picked it from the command menu
-        }
-        if let on = RemoteControlStatus.logEvents(since: started)[id] {
-            if on {
-                log("Turned Remote Control on for \(id) with /remote-control")
-                return .success("\(target.title): Remote Control is back on.")
-            }
-            // It was on after all and the command switched it off: switch it back on.
-            log("/remote-control switched \(id) off; switching it back on")
-            type(remoteControlCommand, into: app.processIdentifier, pressReturn: false)
-            usleep(700_000)
-            pressReturn(app.processIdentifier)
-            sleep(4)
-            return RemoteControlStatus.logEvents(since: started)[id] == true
-                ? .success("\(target.title): Remote Control is on.")
-                : .failure(.noReply)
-        }
+    switch runRemoteControlCommand(id, pid: pid, since: started) {
+    case .on:
+        return .success("\(target.title): Remote Control is back on.")
+    case .switchedOff:
+        // It was on after all and the command switched it off: switch it back on.
+        log("/remote-control switched \(id) off; switching it back on")
+        return runRemoteControlCommand(id, pid: pid, since: Date()) == .on
+            ? .success("\(target.title): Remote Control is on.") : .failure(.noReply)
+    case .notRunning, .nothing:
+        break
     }
 
-    // 2. Fallback: a session reconnects by itself once it runs a turn (unless its switch is off).
-    guard session(id)?.userEnabled != false else { return .failure(.noReply) }
+    // 2. The session isn't running (Claude only keeps a few running). One short message starts
+    //    it; a session whose switch is on reconnects by itself after that turn, and otherwise
+    //    /remote-control works now.
     let before = session(id) ?? target
-    type(wakeText, into: app.processIdentifier)
-    log("Sent the wake message to \(id)")
-    for _ in 0..<40 {
-        sleep(3)
-        if let now = session(id), now.turns > before.turns || now.lastTurn > before.lastTurn {
-            for _ in 0..<8 {
-                if RemoteControlStatus.logEvents(since: started)[id] == true { return .success("\(target.title): Remote Control is back on.") }
-                sleep(2)
-            }
-            return .success("\(target.title) got the message, so its Remote Control should reconnect in a few seconds.")
-        }
+    let sent = Date()
+    type(wakeText, into: pid)
+    log("Sent the wake message to \(id) to start it")
+    var startedTurn = false
+    for _ in 0..<30 {
+        sleep(2)
+        if RemoteControlStatus.logEvents(since: sent)[id] == true { return .success("\(target.title): Remote Control is back on.") }
+        if claudeLogContains("Mapping internal session \(id)", since: sent) { startedTurn = true; break }
+        if let now = session(id), now.turns > before.turns || now.lastTurn > before.lastTurn { startedTurn = true; break }
     }
-    return .failure(.noReply)
+    guard startedTurn else { return .failure(.noReply) }
+    sleep(4)
+    if RemoteControlStatus.logEvents(since: sent)[id] == true || RemoteControlStatus.now().isOn(session(id) ?? target) {
+        return .success("\(target.title): Remote Control is back on.")
+    }
+    guard focusMessageBox(pid) else { return .failure(.noMessageBox) }
+    switch runRemoteControlCommand(id, pid: pid, since: Date()) {
+    case .on: return .success("\(target.title): Remote Control is back on.")
+    default: return .failure(.noReply)
+    }
+}
+
+enum CommandOutcome { case on, switchedOff, notRunning, nothing }
+
+/// Types /remote-control into the open session and reads Claude's log for what it did.
+func runRemoteControlCommand(_ id: String, pid: pid_t, since start: Date) -> CommandOutcome {
+    type(remoteControlCommand, into: pid, pressReturn: false)
+    usleep(700_000)
+    pressReturn(pid)
+    for attempt in 0..<12 {
+        sleep(1)
+        if let on = RemoteControlStatus.logEvents(since: start)[id] {
+            if on { log("Turned Remote Control on for \(id) with /remote-control") }
+            return on ? .on : .switchedOff
+        }
+        if claudeLogContains("Cannot toggle remote control for \(id)", since: start) {
+            log("/remote-control: \(id) isn't running")
+            return .notRunning
+        }
+        if attempt == 3 { pressReturn(pid) }   // the first Return only picked it from the command menu
+    }
+    return .nothing
+}
+
+/// Whether Claude's log has a line containing `text` since `start`.
+func claudeLogContains(_ text: String, since start: Date) -> Bool {
+    guard let handle = try? FileHandle(forReadingFrom: claudeLog) else { return false }
+    defer { try? handle.close() }
+    let size = handle.seekToEndOfFile()
+    handle.seek(toFileOffset: size > 400_000 ? size - 400_000 : 0)
+    let format = DateFormatter()
+    format.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    for line in String(decoding: handle.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n") where line.contains(text) {
+        if let date = format.date(from: String(line.prefix(19))), date >= start.addingTimeInterval(-1) { return true }
+    }
+    return false
 }

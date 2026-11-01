@@ -13,7 +13,7 @@
 import AppKit
 import Foundation
 
-let keeperVersion = "0.3.2"
+let keeperVersion = "0.3.3"
 
 let args = Array(CommandLine.arguments.dropFirst()).filter { !$0.hasPrefix("-NS") && !$0.hasPrefix("-Apple") }
 switch args.first ?? "" {
@@ -37,6 +37,10 @@ case "wake":
 case "version":
     print(keeperVersion)
 default:
+    // Log to ~/Library/Logs/Remote Keeper.log (an app opened from Finder has nowhere else to log).
+    let logFile = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Remote Keeper.log")
+    if isatty(STDERR_FILENO) == 0, freopen(logFile.path, "a", stderr) != nil { setvbuf(stderr, nil, _IOLBF, 0) }
+    log("Remote Keeper \(keeperVersion) started")
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate

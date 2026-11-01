@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3
+
+- Reconnecting works when Claude isn't in front: Remote Keeper brings Claude forward through macOS and focuses the session's message box itself (it used to stop with "message box didn't get focus").
+- Reconnects sessions Claude isn't currently running: /remote-control only works on a running session, so Remote Keeper first starts it with one short message, then turns Remote Control on.
+- Logs to ~/Library/Logs/Remote Keeper.log.
+
 ## 0.3.2
 
 - Update from your phone: the web app shows each Mac's version, and an Update button when a new release is out. The Mac installs it only if it's signed by MannyD Labs and notarized.
