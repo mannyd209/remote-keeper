@@ -188,3 +188,25 @@ body.has-install-top .app { padding-top: calc(env(safe-area-inset-top) + 150px);
 .scanner video { width: 100%; height: 100%; object-fit: cover; }
 .scan-frame { position: absolute; inset: 18%; border: 3px solid rgba(255, 255, 255, 0.9); border-radius: 18px; box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.35); }
 .welcome .primary { max-width: 440px; margin: 24px auto 0; }
+
+/* Computer name, label, rename */
+.title-row { align-items: flex-start; }
+.title-row h1 { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.title-row .status { margin-top: 10px; }
+.name-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.text-button.small { font-size: 15px; }
+.tag { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700;
+  color: var(--tag); background: color-mix(in srgb, var(--tag) 16%, transparent); }
+.chip .tag { padding: 1px 7px; font-size: 11px; }
+.chip[aria-pressed="true"] .tag { color: #fff; background: rgba(255, 255, 255, 0.22); }
+.field { padding: 4px 16px; }
+.field input { width: 100%; padding: 12px 0; border: 0; outline: 0; background: none; color: var(--text); font: inherit; font-size: 17px; }
+.labels { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.label-option { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-radius: 14px; background: var(--card); box-shadow: var(--shadow); font-weight: 600; }
+.label-option .swatch { width: 14px; height: 14px; border-radius: 50%; background: var(--tag); }
+.label-option[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--tag); }
+
+/* About links */
+.link-row { color: inherit; text-decoration: none; }
+.link-row > span:last-child { color: var(--muted); }
+.setting small b { color: var(--accent); font-weight: 600; }

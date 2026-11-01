@@ -66,6 +66,17 @@ final class Updater {
         }
     }
 
+    /// Checks GitHub, then installs the newest release if it's newer (from the phone's Update).
+    func installLatest() {
+        let previous = onChange
+        onChange = { [weak self] in
+            self?.onChange = previous
+            previous?()
+            if self?.available != nil { self?.install() }
+        }
+        check()
+    }
+
     /// Downloads, checks and installs the update, then relaunches.
     func install() {
         guard let release = available else { return }

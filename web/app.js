@@ -87,6 +87,19 @@ function computer(channel = state.current) {
   return state.computers.find((c) => c.channel === channel);
 }
 
+// Your own name and label for a computer (Work, Personal or Hobby), kept on this phone.
+const LABELS = { work: ["Work", "#0a84ff"], personal: ["Personal", "#30d158"], hobby: ["Hobby", "#ff9f0a"] };
+const REPO = "https://github.com/mannyd209/remote-keeper";
+
+function displayName(c) {
+  return c?.customName || c?.name || "Your computer";
+}
+
+function labelTag(c) {
+  const label = LABELS[c?.label];
+  return label ? `<span class="tag" style="--tag:${label[1]}">${label[0]}</span>` : "";
+}
+
 function link(channel = state.current) {
   return state.links.get(channel);
 }
@@ -101,7 +114,7 @@ function select(channel) {
 
 function forgetComputer() {
   const c = computer();
-  if (!confirm(`Forget ${c.name || "this computer"} on this phone? You can link it again by scanning its QR code.`)) return;
+  if (!confirm(`Forget ${displayName(c)} on this phone? You can link it again by scanning its QR code.`)) return;
   link()?.close();
   state.links.delete(c.channel);
   state.computers = state.computers.filter((x) => x.channel !== c.channel);
@@ -308,7 +321,7 @@ function switcher() {
       const online = l?.macOnline === true;
       const count = online && c.offline ? `<span class="chip-count">${c.offline}</span>` : "";
       return `<button class="chip" data-computer="${c.channel}" aria-pressed="${c.channel === state.current}">
-        <span class="dot ${online ? "online" : ""}"></span>${esc(c.name || "Computer")}${count}</button>`;
+        <span class="dot ${online ? "online" : ""}"></span>${esc(displayName(c))}${labelTag(c)}${count}</button>`;
     })
     .join("");
   return `<div class="chips" role="tablist">${chips}<button class="chip add" id="add-computer" aria-label="Add a computer">＋</button></div>`;
@@ -318,13 +331,15 @@ function header(l) {
   const online = l?.macOnline === true;
   const statusText = l?.macOnline === null ? "Connecting…" : online ? "Online" : "Offline";
   return `<div class="eyebrow">Remote Keeper</div>
-    <div class="title-row"><h1>${esc(computer()?.name || "Your computer")}</h1><span class="status ${online ? "online" : ""}"><span class="dot"></span>${statusText}</span></div>`;
+    <div class="title-row"><h1>${esc(displayName(computer()))}</h1><span class="status ${online ? "online" : ""}"><span class="dot"></span>${statusText}</span></div>
+    <div class="name-row">${labelTag(computer())}<button class="text-button small" id="rename">${computer()?.customName || computer()?.label ? "Rename or label" : "Rename or add a label"}</button></div>`;
 }
 
 function render() {
   if (state.view === "scan") return; // the scanner draws itself
   if (!state.computers.length) return renderWelcome();
   if (state.view === "pick") return renderPicker();
+  if (state.view === "edit") return renderEditor();
   const l = link();
   const snap = l?.snapshot;
   let html = (state.computers.length > 1 ? switcher() : "") + header(l);
@@ -346,7 +361,7 @@ function render() {
     if (!snap.ax) settings.push("<b>Allow typing</b> (Accessibility) is off for Remote Keeper on this computer.");
     if (snap.claudeSetting === false) settings.push("Claude's <b>Connect new sessions to Remote Control</b> setting is off.");
     if (settings.length) {
-      notices.push(`${settings.join(" ")} <button class="notice-button" id="show-settings">Show on ${esc(computer()?.name || "computer")}</button>`);
+      notices.push(`${settings.join(" ")} <button class="notice-button" id="show-settings">Show on ${esc(displayName(computer()))}</button>`);
     }
     if (snap.locked) notices.push("This computer is locked, so sessions can't be reconnected until it's unlocked.");
     html += notices.map((n) => `<div class="notice">${n}</div>`).join("");
@@ -355,22 +370,94 @@ function render() {
     const offline = mine.filter((s) => !s.on && !s.waking && !l.pending.has(s.id));
     if (!mine.length) {
       html += `<div class="card intro"><strong>Choose the sessions to keep connected</strong>
-        <p>Pick up to ${snap.max} sessions on this computer. Remote Keeper watches them, alerts you when Claude restarts, and reconnects them when you tap.</p>
+        <p>Pick up to ${snap.max} sessions on this computer. Remote Keeper watches them, alerts you when one goes offline, and reconnects them when you tap.</p>
         <button class="primary" id="choose">Choose Sessions</button></div>`;
     } else {
       if (offline.length) html += `<button class="primary" id="wake-offline">Reconnect ${offline.length === 1 ? "1 Session" : `All ${offline.length}`}</button>`;
       else if (!mine.some((s) => s.waking || l.pending.has(s.id))) html += `<div class="all-good">All your sessions are connected.</div>`;
       html += `<div class="list-head"><h2>Your sessions <span>${mine.length} of ${snap.max}</span></h2><button class="text-button" id="choose">Edit</button></div>`;
       html += `<ul class="list">${mine.map((s) => row(s, l)).join("")}</ul>`;
-      html += `<p class="hint">Green means the session has run since Claude started, so its Remote Control is on. Reconnecting sends it one short message, which uses a little of your Claude usage.</p>`;
+      html += `<p class="hint">Green means Remote Control is on. Reconnecting runs Claude's own /remote-control command on your computer, which uses none of your Claude usage.</p>`;
     }
   }
 
   html += `<div class="section"><h2>Settings</h2><div class="card">${alertsSetting()}
     <div class="setting"><span>Add another computer<small>Scan the QR code in Remote Keeper on that computer</small></span><button class="text-button" id="add-computer">Add</button></div>
-    <div class="setting"><span>Forget ${esc(computer()?.name || "this computer")}</span><button class="link-danger" id="forget">Forget</button></div></div></div>
+    <div class="setting"><span>Forget ${esc(displayName(computer()))}</span><button class="link-danger" id="forget">Forget</button></div></div></div>
+    ${aboutSection(snap)}
     <p class="foot">Remote Keeper by MannyD Labs · not affiliated with Anthropic<br>The relay only passes along encrypted messages.</p>`;
   app.innerHTML = html;
+}
+
+// MARK: - About: version, updates, support
+
+let latestRelease = null; // newest Mac version on GitHub
+
+async function checkLatestRelease() {
+  try {
+    const release = await (await fetch("https://api.github.com/repos/mannyd209/remote-keeper/releases/latest")).json();
+    if (release.tag_name) {
+      latestRelease = release.tag_name.replace(/^v/, "");
+      render();
+    }
+  } catch {}
+}
+
+function isNewer(a, b) {
+  const x = a.split(".").map(Number), y = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+}
+
+function aboutSection(snap) {
+  const version = snap?.mac?.version;
+  let line = version ? `Version ${esc(version)} on ${esc(displayName(computer()))}` : "Version shows when this computer is online";
+  let action = "";
+  if (version && latestRelease) {
+    if (isNewer(latestRelease, version)) {
+      line += ` · <b>${esc(latestRelease)} is available</b>`;
+      action = `<button class="pill" id="update-mac">Update</button>`;
+    } else {
+      line += " · Up to date";
+    }
+  }
+  return `<div class="section"><h2>About</h2><div class="card">
+    <div class="setting"><span>Remote Keeper for Mac<small>${line}</small></span>${action}</div>
+    <a class="setting link-row" href="${REPO}/issues/new/choose" target="_blank" rel="noopener"><span>Support &amp; report an issue</span><span aria-hidden="true">↗</span></a>
+    <a class="setting link-row" href="${REPO}" target="_blank" rel="noopener"><span>Remote Keeper on GitHub<small>Open source, MIT license</small></span><span aria-hidden="true">↗</span></a>
+    <a class="setting link-row" href="https://ko-fi.com/mannydlabs" target="_blank" rel="noopener"><span>Buy me a coffee ☕</span><span aria-hidden="true">↗</span></a>
+  </div></div>`;
+}
+
+// MARK: - Renaming and labeling a computer (on this phone)
+
+let editLabel = null;
+
+function renderEditor() {
+  const c = computer();
+  const options = [["", "None", "#8e8e93"], ...Object.entries(LABELS).map(([k, [name, color]]) => [k, name, color])];
+  app.innerHTML = `<div class="picker-bar"><button class="text-button" id="edit-cancel">Cancel</button><strong>Computer</strong><button class="text-button bold" id="edit-save">Save</button></div>
+    <div class="section" style="margin-top:6px"><h2>Name</h2>
+      <div class="card field"><input id="edit-name" type="text" maxlength="40" autocomplete="off" value="${esc(c.customName || "")}" placeholder="${esc(c.name || "Computer")}"></div>
+      <p class="hint">Leave it empty to use the computer's own name${c.name ? `, ${esc(c.name)}` : ""}.</p></div>
+    <div class="section"><h2>Label</h2>
+      <div class="labels">${options.map(([key, name, color]) =>
+        `<button class="label-option" data-label="${key}" aria-pressed="${(editLabel ?? c.label ?? "") === key}" style="--tag:${color}"><span class="swatch"></span>${name}</button>`).join("")}</div>
+      <p class="hint">Names and labels are kept on this phone.</p></div>`;
+}
+
+function saveEditor() {
+  const c = computer();
+  const name = $("#edit-name").value.trim();
+  if (name && name !== c.name) c.customName = name;
+  else delete c.customName;
+  const label = editLabel ?? c.label ?? "";
+  if (label) c.label = label;
+  else delete c.label;
+  editLabel = null;
+  saveComputers();
+  state.view = "main";
+  render();
 }
 
 function renderPicker() {
@@ -378,7 +465,7 @@ function renderPicker() {
   const full = state.picked.size >= max;
   let html = `<div class="picker-bar"><button class="text-button" id="pick-cancel">Cancel</button>
     <strong>Choose Sessions</strong><button class="text-button bold" id="pick-done">Done</button></div>
-    <p class="subline">${state.picked.size} of ${max} chosen on ${esc(computer()?.name || "this computer")}. Remote Keeper only watches and reconnects the sessions you choose.</p>`;
+    <p class="subline">${state.picked.size} of ${max} chosen on ${esc(displayName(computer()))}. Remote Keeper only watches and reconnects the sessions you choose.</p>`;
   if (!state.choices) {
     html += `<div class="list empty">Loading sessions…</div>`;
   } else if (!state.choices.length) {
@@ -459,6 +546,22 @@ app.addEventListener("click", async (event) => {
     reconnect(link().snapshot.sessions.filter((s) => !s.on && !s.waking).map((s) => s.id));
   } else if (target.id === "alerts") {
     await toggleAlerts(target.getAttribute("aria-checked") !== "true");
+  } else if (target.id === "rename") {
+    editLabel = null;
+    state.view = "edit";
+    render();
+  } else if (target.dataset.label !== undefined) {
+    editLabel = target.dataset.label;
+    for (const b of document.querySelectorAll(".label-option")) b.setAttribute("aria-pressed", b.dataset.label === editLabel);
+  } else if (target.id === "edit-save") {
+    saveEditor();
+  } else if (target.id === "edit-cancel") {
+    editLabel = null;
+    state.view = "main";
+    render();
+  } else if (target.id === "update-mac") {
+    const sent = await link()?.send({ t: "update" });
+    toast(sent ? `Updating Remote Keeper on ${displayName(computer())}. It restarts in a minute.` : "That computer isn't connected right now.");
   } else if (target.id === "forget") {
     forgetComputer();
   }
@@ -682,7 +785,7 @@ function startDemo() {
   state.computers = demo.map(({ channel, name, offline }) => ({ channel, name, offline, secret: "" }));
   for (const d of demo) {
     const l = { channel: d.channel, macOnline: true, pending: new Set(), hello() {}, close() {}, socket: null };
-    l.snapshot = { t: "state", max: 10, locked: false, ax: true, claudeSetting: true, claude: { running: true, since: now - 7 * 60000 }, sessions: d.sessions };
+    l.snapshot = { t: "state", mac: { name: d.name, version: "0.3.1" }, max: 10, locked: false, ax: true, claudeSetting: true, claude: { running: true, since: now - 7 * 60000 }, sessions: d.sessions };
     l.send = async (m) => {
       if (m.t === "choices") {
         const extra = ["Onboarding emails", "Invoice PDF export", "Dark mode polish", "Search indexing", "Docs site", "Bug bash: login"];
@@ -710,6 +813,7 @@ function startDemo() {
   state.current = demo[0].channel;
   render();
   showInstall();
+  checkLatestRelease();
 }
 
 (async () => {
@@ -736,4 +840,5 @@ function startDemo() {
   updateBadge();
   render();
   if (state.computers.length) showInstall();
+  checkLatestRelease();
 })();

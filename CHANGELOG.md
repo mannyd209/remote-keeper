@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- Update from your phone: the web app shows each Mac's version, and an Update button when a new release is out. The Mac installs it only if it's signed by MannyD Labs and notarized.
+- Web app: rename a computer and label it Work, Personal or Hobby (kept on your phone); full computer names; an About section with support, GitHub and Buy me a coffee links.
+
 ## 0.3.1
 
 - Knows each session's real Remote Control state (Claude's per-session switch and its log), instead of guessing from the last restart. A session you switch off by hand now shows as off.

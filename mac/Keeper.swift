@@ -1,5 +1,6 @@
-// What the phone can ask for, and the restart alerts. The phone can only: get the status of your
-// chosen sessions, list sessions to choose from, choose up to 10, and ask to wake chosen ones. Waking always sends the same fixed
+// What the phone can ask for, and the alerts. The phone can only: get the status of your chosen
+// sessions, list sessions to choose from, choose up to 10, ask to reconnect chosen ones, show the
+// settings popup, and install the latest signed update. Waking always sends the same fixed
 // message, so nothing a phone sends is ever typed or run on this computer.
 
 import AppKit
@@ -69,6 +70,7 @@ final class Keeper {
     private var waking = Set<String>()   // only touched on `queue`
     var onChange: (() -> Void)?          // called on the main queue when the menu should refresh
     var onNeedsSettings: (() -> Void)?   // called on the main queue to show the settings popup
+    var onUpdateRequested: (() -> Void)? // called on the main queue: the phone asked to update this Mac
 
     var relayConnected: Bool { relay?.connected == true }
     var phoneLinked: Bool { store.current.phoneSeenAt != nil }
@@ -108,6 +110,10 @@ final class Keeper {
         switch message["t"] as? String {
         case "hello":
             sendState()
+        case "update":
+            // From the phone's Update button: installs the latest GitHub release, and only if it's
+            // signed by MannyD Labs and notarized (see Updater.swift).
+            DispatchQueue.main.async { self.onUpdateRequested?() }
         case "settings":
             // From the phone's "Show on Mac" button: opens the settings popup here. Nothing else.
             DispatchQueue.main.async { self.onNeedsSettings?() }
