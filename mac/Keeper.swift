@@ -137,11 +137,12 @@ final class Keeper {
 
     /// Your chosen sessions (up to 10), in the order you picked them, with their status.
     func sendState() {
-        let launch = claudeApp()?.launchDate
+        let status = RemoteControlStatus.now()
+        let launch = status.launch
         let live = Dictionary(liveSessions().map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let sessions: [[String: Any]] = store.watched.compactMap { live[$0] }.map { s in
             ["id": s.id, "title": String(s.title.prefix(120)), "pinned": s.pinned, "last": Int(s.lastTurn),
-             "on": likelyConnected(s, since: launch), "waking": waking.contains(s.id)]
+             "on": status.isOn(s), "waking": waking.contains(s.id)]
         }
         relay.send([
             "t": "state",
@@ -182,36 +183,72 @@ final class Keeper {
     }
 
     func offlineWatched() -> [String] {
-        let launch = claudeApp()?.launchDate
-        let live = Dictionary(uniqueKeysWithValues: liveSessions().map { ($0.id, $0) })
-        return store.watched.filter { id in live[id].map { !likelyConnected($0, since: launch) } ?? false }
+        let status = RemoteControlStatus.now()
+        let live = Dictionary(liveSessions().map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return store.watched.filter { id in live[id].map { !status.isOn($0) } ?? false }
     }
 
     func wakeWatched() {
         queue.async { self.enqueueWake(Array(self.offlineWatched().filter { !self.waking.contains($0) }.prefix(maxBatch))) }
     }
 
-    // MARK: Restart alerts
+    // MARK: Alerts
 
-    /// Tells your phone when Claude restarts (that's when every session loses Remote Control).
-    /// It only offers to reconnect; nothing is woken until you tap.
+    /// Watches your chosen sessions and tells your phone when Remote Control goes off for any of
+    /// them: Claude restarted or quit, or a session's switch was turned off. It only offers to
+    /// reconnect; nothing is reconnected until you tap.
     private func watchForRestarts() {
         Thread.detachNewThread {
             var lastLaunch = claudeApp()?.launchDate
+            var lastOffline = Set(self.offlineWatched())
+            var quitSince: Date?
+            var quitAlerted = false
             while true {
                 sleep(10)
-                let launch = claudeApp()?.launchDate
-                defer { if launch != nil { lastLaunch = launch } }
-                guard let launch, launch != lastLaunch else { continue }
-                log("Claude restarted")
-                sleep(45)   // let it settle, and let sessions you open yourself reconnect
-                let offline = self.offlineWatched()
-                self.queue.async { self.sendState() }
-                guard !offline.isEmpty else { continue }
                 let computer = Host.current().localizedName ?? "your Mac"
-                let count = offline.count == 1 ? "1 of your sessions" : "\(offline.count) of your sessions"
-                self.relay.push(["t": "alert", "title": "Claude restarted on \(computer)", "offline": offline.count,
-                                 "body": "Remote Control is off for \(count). Tap to reconnect."])
+                let launch = claudeApp()?.launchDate
+
+                // Claude quit: say so once if it stays closed for a minute.
+                guard let launch else {
+                    quitSince = quitSince ?? Date()
+                    if !quitAlerted, Date().timeIntervalSince(quitSince!) > 60, !self.store.watched.isEmpty {
+                        quitAlerted = true
+                        self.queue.async { self.sendState() }
+                        let n = self.store.watched.count
+                        self.relay.push(["t": "alert", "title": "Claude quit on \(computer)", "offline": n,
+                                         "body": "Remote Control is off for \(n == 1 ? "your session" : "all \(n) of your sessions"). Tap to reconnect; Remote Keeper opens Claude."])
+                    }
+                    lastOffline = Set(self.store.watched)
+                    continue
+                }
+                quitSince = nil
+                quitAlerted = false
+
+                // Claude restarted: every session dropped. Give it a moment, then report.
+                if launch != lastLaunch {
+                    lastLaunch = launch
+                    log("Claude restarted")
+                    sleep(45)   // let it settle, and let sessions you open yourself reconnect
+                    let offline = self.offlineWatched()
+                    lastOffline = Set(offline)
+                    self.queue.async { self.sendState() }
+                    guard !offline.isEmpty else { continue }
+                    let count = offline.count == 1 ? "1 of your sessions" : "\(offline.count) of your sessions"
+                    self.relay.push(["t": "alert", "title": "Claude restarted on \(computer)", "offline": offline.count,
+                                     "body": "Remote Control is off for \(count). Tap to reconnect."])
+                    continue
+                }
+
+                // A session went off (its switch, or it dropped) or came back.
+                let offline = Set(self.offlineWatched())
+                guard offline != lastOffline else { continue }
+                let newlyOff = offline.subtracting(lastOffline).filter { id in self.queue.sync { !self.waking.contains(id) } }
+                lastOffline = offline
+                self.queue.async { self.sendState() }
+                guard !newlyOff.isEmpty else { continue }
+                let title = newlyOff.count == 1 ? (session(newlyOff.first!)?.title ?? "A session") : "\(newlyOff.count) sessions"
+                self.relay.push(["t": "alert", "title": "Remote Control off on \(computer)", "offline": offline.count,
+                                 "body": "\(title) can't be reached from your phone. Tap to reconnect."])
             }
         }
     }

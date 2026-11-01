@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Knows each session's real Remote Control state (Claude's per-session switch and its log), instead of guessing from the last restart. A session you switch off by hand now shows as off.
+- Alerts when any of your chosen sessions goes off, for any reason: Claude restarted or quit, or a session's Remote Control was switched off. The alert updates the app badge.
+- Reconnects with Claude's own /remote-control command, which uses no Claude usage and also works for sessions that were switched off. Falls back to the short message if needed.
+
 ## 0.3.0 (first public release)
 
 - Remote Keeper for Mac: menu bar app with a QR setup window, an Allow Typing step, and a settings popup with buttons that open the exact place in System Settings (Accessibility, Login Items) or Claude's settings.

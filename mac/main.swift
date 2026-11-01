@@ -13,15 +13,15 @@
 import AppKit
 import Foundation
 
-let keeperVersion = "0.3.0"
+let keeperVersion = "0.3.1"
 
 let args = Array(CommandLine.arguments.dropFirst()).filter { !$0.hasPrefix("-NS") && !$0.hasPrefix("-Apple") }
 switch args.first ?? "" {
 case "list":
-    let launch = claudeApp()?.launchDate
-    print("Claude started: \(launch.map { "\($0)" } ?? "not running")")
+    let status = RemoteControlStatus.now()
+    print("Claude started: \(status.launch.map { "\($0)" } ?? "not running")")
     for s in liveSessions().prefix(40) {
-        print("\(likelyConnected(s, since: launch) ? "on " : "off") \(s.pinned ? "★" : " ") \(s.title)\t\(s.id)")
+        print("\(status.isOn(s) ? "on " : "off") \(s.pinned ? "★" : " ") \(s.title)\t\(s.id)")
     }
 case "wake":
     let target = args.dropFirst().first { !$0.hasPrefix("--") } ?? ""

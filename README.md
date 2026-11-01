@@ -46,10 +46,10 @@ Hi, I'm Manny from **MannyD Labs**. I run a lot of Claude Code sessions on my Ma
 
 ## How it works
 
-A Claude Code session turns Remote Control back on by itself as soon as it runs one turn. So when you tap **Reconnect** on your phone, Remote Keeper opens that session in the Claude app on your Mac (starting the app if needed) and sends it one fixed, short message: *"Remote Keeper: this message reconnects Remote Control for this session. Reply only: ok"*. A few seconds later the session is back on your phone.
+When you tap **Reconnect** on your phone, Remote Keeper opens that session in the Claude app on your Mac (starting the app if needed) and types Claude's own **/remote-control** command, which turns Remote Control back on without using any of your Claude usage. A few seconds later the session is back on your phone. (If that ever doesn't take, it falls back to one short, fixed message, *"Remote Keeper: this message reconnects Remote Control for this session. Reply only: ok"*, since a session reconnects by itself once it runs a turn.)
 
 - **Choose up to 10 sessions** per computer to keep connected. Remote Keeper only watches and reconnects those.
-- **Restart alerts:** when Claude restarts and your sessions go offline, your phone gets a notification, and the app icon shows how many are offline.
+- **Alerts:** when any of your chosen sessions loses Remote Control (Claude restarted or quit, or its switch was turned off), your phone gets a notification, and the app icon shows how many are offline.
 - **Several computers:** link as many Macs as you like and switch between them in the app.
 - **Nothing to install on your phone:** it's a web app you add to your Home Screen. It opens like an app and works on iPhone and Android.
 
@@ -74,13 +74,13 @@ To add another Mac, install Remote Keeper on it, then tap **＋** in the app on 
 
 ## Privacy and security
 
-- **It only ever types one fixed message.** Nothing you type on your phone is sent to your computer, so Remote Keeper can't be used to run commands on it.
+- **It only ever types Claude's /remote-control command** (or, as a fallback, one fixed message). Nothing you type on your phone is sent to your computer, so Remote Keeper can't be used to run commands on it.
 - **It only reconnects when you tap.** It never reconnects anything on its own.
 - **It only reads** the Claude app's session list (titles, pinned, last activity) and its log, and never changes them.
 - **End-to-end encrypted.** Your phone and your Mac talk through a small relay, but the QR code holds a secret in the part of the link that browsers never send to a server. Both ends derive their keys from it (HKDF-SHA256, AES-256-GCM), so the relay only passes along ciphertext: it can't read your session names or fake a tap. You can check this in [`web/crypto.js`](web/crypto.js) and [`mac/Relay.swift`](mac/Relay.swift).
 - **No account and no tracking.** The relay keeps no session data, only push subscriptions for restart alerts.
 
-Each reconnect is one short turn on that session's model, so it uses a little of your Claude usage.
+Reconnecting with /remote-control uses no Claude usage. Only the fallback message is a short turn on that session's model.
 
 ## FAQ
 
