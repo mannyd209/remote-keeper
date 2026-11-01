@@ -101,6 +101,7 @@ final class Keeper {
     func sendWill() {
         guard awake, relayConnected, !store.watched.isEmpty else { return }
         let computer = Host.current().localizedName ?? "your Mac"
+        log("Offline alert armed with the relay")
         relay.setWill(["t": "alert", "kind": "offline", "title": "Remote Keeper is offline on \(computer)",
                        "body": "It hasn't checked in for 5 minutes, so your sessions there aren't being watched. Check that the Mac is on, awake and online."])
     }
