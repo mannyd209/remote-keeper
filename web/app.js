@@ -35,6 +35,7 @@ function loadComputers() {
 }
 
 function saveComputers() {
+  if (state.demo) return; // the demo's made-up computers are never stored
   try {
     localStorage.setItem(STORE, JSON.stringify(state.computers));
     if (state.current) localStorage.setItem(CURRENT, state.current);
@@ -776,6 +777,7 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
 // keeper.mannydlabs.com/#demo shows made-up computers and sessions, with no connection at all
 // (for screenshots, and to try the app without a Mac).
 function startDemo() {
+  state.demo = true;
   const now = Date.now();
   const make = (title, minutes, on, pinned = false) => ({ id: title, title, last: now - minutes * 60000, on, pinned, waking: false });
   const demo = [
