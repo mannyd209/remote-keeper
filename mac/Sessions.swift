@@ -30,31 +30,71 @@ struct Session {
     let userEnabled: Bool? // Claude's per-session Remote Control switch (nil: never set)
 }
 
+/// Every session file, read only when it changed since the last look. The files add up to tens of
+/// megabytes, and this runs every 10 seconds, so re-reading them all each time cost real CPU and memory.
 func allSessions() -> [Session] {
     let fm = FileManager.default
     var found: [Session] = []
+    var seen = Set<String>()
     for account in (try? fm.contentsOfDirectory(atPath: sessionsRoot.path)) ?? [] {
         let accountDir = sessionsRoot.appendingPathComponent(account)
         for org in (try? fm.contentsOfDirectory(atPath: accountDir.path)) ?? [] {
             let orgDir = accountDir.appendingPathComponent(org)
             for file in (try? fm.contentsOfDirectory(atPath: orgDir.path)) ?? [] where file.hasPrefix("local_") && file.hasSuffix(".json") {
-                guard let data = try? Data(contentsOf: orgDir.appendingPathComponent(file)),
-                      let d = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                      let id = d["sessionId"] as? String else { continue }
-                let lastTurn = (d["lastTurnEdgeAt"] as? Double) ?? (d["lastActivityAt"] as? Double) ?? 0
-                found.append(Session(
-                    id: id,
-                    title: (d["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled",
-                    cwd: d["cwd"] as? String ?? "",
-                    pinned: d["isStarred"] as? Bool == true,
-                    archived: d["isArchived"] as? Bool == true,
-                    lastTurn: lastTurn,
-                    turns: d["completedTurns"] as? Int ?? 0,
-                    userEnabled: d["remoteControlUserEnabled"] as? Bool))
+                let path = orgDir.appendingPathComponent(file).path
+                seen.insert(path)
+                if let session = sessionCache.session(at: path) { found.append(session) }
             }
         }
     }
+    sessionCache.keep(only: seen)
     return found
+}
+
+private let sessionCache = SessionCache()
+
+private final class SessionCache {
+    private let lock = NSLock()
+    private var entries: [String: (modified: timespec, size: off_t, session: Session?)] = [:]
+
+    func session(at path: String) -> Session? {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        lock.lock()
+        if let entry = entries[path], entry.modified.tv_sec == info.st_mtimespec.tv_sec,
+           entry.modified.tv_nsec == info.st_mtimespec.tv_nsec, entry.size == info.st_size {
+            lock.unlock()
+            return entry.session
+        }
+        lock.unlock()
+        let session = autoreleasepool { SessionCache.read(path) }
+        lock.lock()
+        entries[path] = (info.st_mtimespec, info.st_size, session)
+        lock.unlock()
+        return session
+    }
+
+    func keep(only paths: Set<String>) {
+        lock.lock()
+        entries = entries.filter { paths.contains($0.key) }
+        lock.unlock()
+    }
+
+    private static func read(_ path: String) -> Session? {
+        guard let data = FileManager.default.contents(atPath: path),
+              let d = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let id = d["sessionId"] as? String else { return nil }
+        let lastTurn = (d["lastTurnEdgeAt"] as? Double) ?? (d["lastActivityAt"] as? Double) ?? 0
+        return Session(
+            id: id,
+            title: (d["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled",
+            cwd: d["cwd"] as? String ?? "",
+            pinned: d["isStarred"] as? Bool == true,
+            archived: d["isArchived"] as? Bool == true,
+            lastTurn: lastTurn,
+            turns: d["completedTurns"] as? Int ?? 0,
+            userEnabled: d["remoteControlUserEnabled"] as? Bool)
+    }
 }
 
 /// Sessions you can wake: not archived, and their folder still exists.
@@ -94,6 +134,10 @@ struct RemoteControlStatus {
 
     /// The last thing Claude's log says about each session's Remote Control since `start`.
     static func logEvents(since start: Date) -> [String: Bool] {
+        autoreleasepool { readLogEvents(since: start) }
+    }
+
+    private static func readLogEvents(since start: Date) -> [String: Bool] {
         guard let handle = try? FileHandle(forReadingFrom: claudeLog) else { return [:] }
         defer { try? handle.close() }
         let size = handle.seekToEndOfFile()
