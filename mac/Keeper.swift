@@ -7,8 +7,8 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-let maxBatch = 10
-let maxWatched = 10   // you choose up to 10 sessions; only those are watched and reconnected
+let maxBatch = 50   // reconnected one after another
+let maxWatched = 500  // effectively no limit (the web app lets you choose 10 per computer; the iPhone app, any number)
 let supportDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Remote Keeper")
 let configURL = ProcessInfo.processInfo.environment["REMOTE_KEEPER_CONFIG"].map { URL(fileURLWithPath: $0) }
     ?? supportDir.appendingPathComponent("config.json")
@@ -121,7 +121,7 @@ final class Keeper {
             DispatchQueue.main.async { self.onNeedsSettings?() }
         case "choices":
             // Sessions to choose from: most recent first (pinned ones are marked).
-            let choices: [[String: Any]] = liveSessions().prefix(60).map { s in
+            let choices: [[String: Any]] = liveSessions().prefix(300).map { s in
                 ["id": s.id, "title": String(s.title.prefix(120)), "pinned": s.pinned, "last": Int(s.lastTurn)]
             }
             relay.send(["t": "choices", "sessions": choices])

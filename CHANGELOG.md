@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.5
+
+- No limit on how many sessions a computer keeps connected (the web app still lets you choose 10 per computer; the upcoming iPhone app, any number). Reconnect All handles up to 50 at a time.
+
 ## 0.3.4
 
 - Update notifications: when a new Remote Keeper is out, your Mac sends your phone one notification for that version, and the web app shows a banner at the top. Tap it to update that Mac. It shows Updating… until the Mac is back on the new version.

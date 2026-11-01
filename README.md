@@ -13,6 +13,8 @@
 <p align="center">
   <a href="https://github.com/mannyd209/remote-keeper/releases/latest/download/Remote-Keeper.dmg"><img src="https://img.shields.io/badge/Download%20for%20Mac-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Mac" height="44"></a>
   &nbsp;
+  <img src="https://img.shields.io/badge/iPhone%20app-coming%20soon-5B4CF0?style=for-the-badge&logo=apple&logoColor=white" alt="iPhone app: coming soon" height="44">
+  &nbsp;
   <img src="https://img.shields.io/badge/Windows-coming%20soon-555555?style=for-the-badge&logo=windows&logoColor=white" alt="Windows: coming soon" height="44">
   &nbsp;
   <a href="https://ko-fi.com/mannydlabs"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-FFDD00?style=for-the-badge&labelColor=1a1a1a" alt="Buy me a coffee" height="44"></a>
@@ -48,7 +50,7 @@ Hi, I'm Manny from **MannyD Labs**. I run a lot of Claude Code sessions on my Ma
 
 When you tap **Reconnect** on your phone, Remote Keeper opens that session in the Claude app on your Mac (starting the app if needed) and types Claude's own **/remote-control** command, which turns Remote Control back on without using any of your Claude usage. A few seconds later the session is back on your phone. (If that ever doesn't take, it falls back to one short, fixed message, *"Remote Keeper: this message reconnects Remote Control for this session. Reply only: ok"*, since a session reconnects by itself once it runs a turn.)
 
-- **Choose up to 10 sessions** per computer to keep connected. Remote Keeper only watches and reconnects those.
+- **Choose the sessions** to keep connected (up to 10 per computer in the web app). Remote Keeper only watches and reconnects those.
 - **Alerts:** when any of your chosen sessions loses Remote Control (Claude restarted or quit, or its switch was turned off), your phone gets a notification, and the app icon shows how many are offline.
 - **Several computers:** link as many Macs as you like and switch between them in the app.
 - **Nothing to install on your phone:** it's a web app you add to your Home Screen. It opens like an app and works on iPhone and Android.
@@ -83,6 +85,8 @@ To add another Mac, install Remote Keeper on it, then tap **＋** in the app on 
 Reconnecting with /remote-control uses no Claude usage. Only the fallback message is a short turn on that session's model.
 
 ## FAQ
+
+**Is there an iPhone app?** Coming soon, free on the App Store: no session limit, a **Reconnect** button right in the notification, Home Screen and Lock Screen widgets, Siri and Shortcuts, and your computers synced with iCloud. The web app stays, for Android and for anyone who'd rather not install anything.
 
 **Windows?** Coming soon.
 

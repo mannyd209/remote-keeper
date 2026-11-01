@@ -91,6 +91,7 @@ function computer(channel = state.current) {
 // Your own name and label for a computer (Work, Personal or Hobby), kept on this phone.
 const LABELS = { work: ["Work", "#0a84ff"], personal: ["Personal", "#30d158"], hobby: ["Hobby", "#ff9f0a"] };
 const REPO = "https://github.com/mannyd209/remote-keeper";
+const WEB_MAX = 10; // sessions per computer in the web app (the iPhone app has no limit)
 
 function displayName(c) {
   return c?.customName || c?.name || "Your computer";
@@ -371,12 +372,12 @@ function render() {
     const offline = mine.filter((s) => !s.on && !s.waking && !l.pending.has(s.id));
     if (!mine.length) {
       html += `<div class="card intro"><strong>Choose the sessions to keep connected</strong>
-        <p>Pick up to ${snap.max} sessions on this computer. Remote Keeper watches them, alerts you when one goes offline, and reconnects them when you tap.</p>
+        <p>Pick up to ${WEB_MAX} sessions on this computer. Remote Keeper watches them, alerts you when one goes offline, and reconnects them when you tap.</p>
         <button class="primary" id="choose">Choose Sessions</button></div>`;
     } else {
       if (offline.length) html += `<button class="primary" id="wake-offline">Reconnect ${offline.length === 1 ? "1 Session" : `All ${offline.length}`}</button>`;
       else if (!mine.some((s) => s.waking || l.pending.has(s.id))) html += `<div class="all-good">All your sessions are connected.</div>`;
-      html += `<div class="list-head"><h2>Your sessions <span>${mine.length} of ${snap.max}</span></h2><button class="text-button" id="choose">Edit</button></div>`;
+      html += `<div class="list-head"><h2>Your sessions <span>${mine.length > WEB_MAX ? `${mine.length}` : `${mine.length} of ${WEB_MAX}`}</span></h2><button class="text-button" id="choose">Edit</button></div>`;
       html += `<ul class="list">${mine.map((s) => row(s, l)).join("")}</ul>`;
       html += `<p class="hint">Green means Remote Control is on. Reconnecting runs Claude's own /remote-control command on your computer, which uses none of your Claude usage.</p>`;
     }
@@ -484,7 +485,7 @@ function saveEditor() {
 }
 
 function renderPicker() {
-  const max = link()?.snapshot?.max || 10;
+  const max = WEB_MAX;
   const full = state.picked.size >= max;
   let html = `<div class="picker-bar"><button class="text-button" id="pick-cancel">Cancel</button>
     <strong>Choose Sessions</strong><button class="text-button bold" id="pick-done">Done</button></div>
@@ -552,7 +553,7 @@ app.addEventListener("click", async (event) => {
   } else if (target.dataset.pick) {
     const id = target.dataset.pick;
     if (state.picked.has(id)) state.picked.delete(id);
-    else if (state.picked.size < (link()?.snapshot?.max || 10)) state.picked.add(id);
+    else if (state.picked.size < (WEB_MAX)) state.picked.add(id);
     render();
   } else if (target.id === "choose") {
     openPicker();
