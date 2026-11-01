@@ -94,6 +94,12 @@ Reconnecting with /remote-control uses no Claude usage. Only the fallback messag
 
 **Can I build it myself?** Yes, the Mac app and the web app are here under the MIT license. Builds from source don't include our relay or its key (official releases are the only builds that can use it), so to run your own you need your own relay that speaks the same protocol: see [`docs/PROTOCOL.md`](docs/PROTOCOL.md), then set `REMOTE_KEEPER_HOST` and `REMOTE_KEEPER_APP_KEY`. Build with `mac/build.sh`.
 
+## More from MannyD Labs
+
+<a href="https://github.com/mannyd209/codemi"><img src="https://raw.githubusercontent.com/mannyd209/codemi/main/docs/banner.jpg" alt="CodeMi" width="100%"></a>
+
+**Use Kimi Code too?** [CodeMi](https://github.com/mannyd209/codemi) is a free iPhone and iPad remote for Kimi Code, from the same lab. Like Remote Keeper, it can turn Remote Control back on when an update switches it off.
+
 ## Support
 
 Found a bug or have an idea? [Open an issue](https://github.com/mannyd209/remote-keeper/issues/new/choose). Questions: info@mannydlabs.com. If Remote Keeper saves you a trip back to your desk, you can [buy me a coffee](https://ko-fi.com/mannydlabs). ☕
