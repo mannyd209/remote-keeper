@@ -23,15 +23,19 @@
   <a href="#install">Install</a> ·
   <a href="#privacy-and-security">Privacy and security</a> ·
   <a href="#faq">FAQ</a> ·
+  <a href="https://mannydlabs.com/remote-keeper">Website</a> ·
   <a href="https://github.com/mannyd209/remote-keeper/issues/new/choose">Report a bug / request a feature</a>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/phone-01-sessions.jpg" alt="Your sessions, with two offline" width="260">
-  &nbsp;
-  <img src="docs/screenshots/phone-02-connected.jpg" alt="All sessions connected" width="260">
-  &nbsp;
-  <img src="docs/screenshots/phone-03-add-to-home-screen.jpg" alt="Add to Home Screen, with an arrow pointing at the right button" width="260">
+  <img src="docs/screenshots/01-reconnect.jpg" alt="Remote Control off? One tap. Back on." width="250">
+  <img src="docs/screenshots/02-alerts.jpg" alt="Restart alerts with a badge" width="250">
+  <img src="docs/screenshots/03-choose.jpg" alt="Pick up to 10 sessions" width="250">
+</p>
+<p align="center">
+  <img src="docs/screenshots/04-computers.jpg" alt="All your Macs, one app" width="250">
+  <img src="docs/screenshots/05-home-screen.jpg" alt="Add to your Home Screen" width="250">
+  <img src="docs/screenshots/06-private.jpg" alt="End-to-end encrypted" width="250">
 </p>
 
 ---
@@ -60,9 +64,8 @@ A Claude Code session turns Remote Control back on by itself as soon as it runs 
 To add another Mac, install Remote Keeper on it, then tap **＋** in the app on your phone and scan that Mac's code.
 
 <p align="center">
-  <img src="docs/screenshots/mac-01-setup.jpg" alt="Setup window on the Mac" width="420">
-  &nbsp;
-  <img src="docs/screenshots/mac-02-settings.jpg" alt="The settings popup opens the right place in System Settings" width="420">
+  <img src="docs/screenshots/07-mac-setup.jpg" alt="Scan once on your Mac" width="420">
+  <img src="docs/screenshots/08-mac-settings.jpg" alt="Guided setup opens the right settings" width="420">
 </p>
 
 **Requirements:** macOS 13 or later and the Claude desktop app, with **Settings → Claude Code → Connect new sessions to Remote Control** turned on (Remote Keeper checks this and opens the right page if it's off). Your Mac has to be awake and unlocked to reconnect a session.

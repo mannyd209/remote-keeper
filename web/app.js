@@ -684,6 +684,12 @@ function startDemo() {
     const l = { channel: d.channel, macOnline: true, pending: new Set(), hello() {}, close() {}, socket: null };
     l.snapshot = { t: "state", max: 10, locked: false, ax: true, claudeSetting: true, claude: { running: true, since: now - 7 * 60000 }, sessions: d.sessions };
     l.send = async (m) => {
+      if (m.t === "choices") {
+        const extra = ["Onboarding emails", "Invoice PDF export", "Dark mode polish", "Search indexing", "Docs site", "Bug bash: login"];
+        state.choices = [...d.sessions, ...extra.map((t, i) => make(t, 300 + i * 900, false))].sort((a, b) => b.last - a.last);
+        setTimeout(render, 0);
+      }
+      if (m.t === "set") d.sessions = d.sessions.filter((s) => m.ids.includes(s.id));
       if (m.t === "wake") {
         for (const id of m.ids) {
           const s = d.sessions.find((x) => x.id === id);
