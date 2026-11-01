@@ -343,7 +343,7 @@ function render() {
   if (state.view === "edit") return renderEditor();
   const l = link();
   const snap = l?.snapshot;
-  let html = (state.computers.length > 1 ? switcher() : "") + header(l);
+  let html = (state.computers.length > 1 ? switcher() : "") + updateBanner(snap) + header(l);
 
   if (l?.macOnline !== true) {
     html += `<p class="subline">${
@@ -410,17 +410,39 @@ function isNewer(a, b) {
   return false;
 }
 
+/** A newer Remote Keeper for this computer: from the Mac itself, or from GitHub. */
+function updateFor(snap) {
+  const version = snap?.mac?.version;
+  if (!version) return null;
+  const newest = snap.update || latestRelease;
+  return newest && isNewer(newest, version) ? newest : null;
+}
+
+const updating = {}; // channel → version we asked that computer to install
+
+/** The banner at the top: tap to update this computer's Remote Keeper. */
+function updateBanner(snap) {
+  const newest = updateFor(snap);
+  const asked = updating[state.current];
+  if (asked && (!newest || isNewer(snap?.mac?.version || "0", asked) || snap?.mac?.version === asked)) delete updating[state.current];
+  if (!newest || link()?.macOnline !== true) return "";
+  if (updating[state.current]) {
+    return `<div class="update-banner busy"><span class="spinner" aria-hidden="true"></span><span><b>Updating Remote Keeper</b> to ${esc(newest)} on ${esc(displayName(computer()))}. It restarts in about a minute.</span></div>`;
+  }
+  return `<button class="update-banner" id="update-mac"><span class="update-icon" aria-hidden="true">↑</span>
+    <span><b>Remote Keeper ${esc(newest)} is available</b>for ${esc(displayName(computer()))}. Tap to update.</span><span class="chev" aria-hidden="true">›</span></button>`;
+}
+
 function aboutSection(snap) {
   const version = snap?.mac?.version;
   let line = version ? `Version ${esc(version)} on ${esc(displayName(computer()))}` : "Version shows when this computer is online";
   let action = "";
-  if (version && latestRelease) {
-    if (isNewer(latestRelease, version)) {
-      line += ` · <b>${esc(latestRelease)} is available</b>`;
-      action = `<button class="pill" id="update-mac">Update</button>`;
-    } else {
-      line += " · Up to date";
-    }
+  const newest = updateFor(snap);
+  if (newest) {
+    line += ` · <b>${esc(newest)} is available</b>`;
+    action = updating[state.current] ? `<span class="pill">Updating…</span>` : `<button class="pill" id="update-mac">Update</button>`;
+  } else if (version && latestRelease) {
+    line += " · Up to date";
   }
   return `<div class="section"><h2>About</h2><div class="card">
     <div class="setting"><span>Remote Keeper for Mac<small>${line}</small></span>${action}</div>
@@ -561,8 +583,11 @@ app.addEventListener("click", async (event) => {
     state.view = "main";
     render();
   } else if (target.id === "update-mac") {
+    const newest = updateFor(link()?.snapshot);
     const sent = await link()?.send({ t: "update" });
-    toast(sent ? `Updating Remote Keeper on ${displayName(computer())}. It restarts in a minute.` : "That computer isn't connected right now.");
+    if (sent && newest) updating[state.current] = newest;
+    if (!sent) toast("That computer isn't connected right now.");
+    render();
   } else if (target.id === "forget") {
     forgetComputer();
   }

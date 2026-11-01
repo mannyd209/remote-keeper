@@ -1,4 +1,5 @@
-// Updates from GitHub Releases. Remote Keeper checks the latest release twice a day, and when you
+// Updates from GitHub Releases. Remote Keeper checks the latest release every 4 hours (and tells
+// your phone, see Keeper.setAvailableUpdate), and when you
 // choose Update it downloads the DMG and installs it only if the app inside is signed by MannyD
 // Labs (team 28SERP79H5), has our bundle id, and is notarized by Apple.
 
@@ -21,7 +22,7 @@ final class Updater {
 
     func start() {
         check()
-        Timer.scheduledTimer(withTimeInterval: 12 * 3600, repeats: true) { [weak self] _ in self?.check() }
+        Timer.scheduledTimer(withTimeInterval: 4 * 3600, repeats: true) { [weak self] _ in self?.check() }
     }
 
     /// Asks GitHub for the latest release. `interactive`: say so when you're already up to date.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.4
+
+- Update notifications: when a new Remote Keeper is out, your Mac sends your phone one notification for that version, and the web app shows a banner at the top. Tap it to update that Mac. It shows Updating… until the Mac is back on the new version.
+- Checks for updates every 4 hours.
+
 ## 0.3.3
 
 - Reconnecting works when Claude isn't in front: Remote Keeper brings Claude forward through macOS and focuses the session's message box itself (it used to stop with "message box didn't get focus").

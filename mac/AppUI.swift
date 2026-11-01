@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         keeper.onChange = { [weak self] in self?.refreshSetup() }
         keeper.onNeedsSettings = { [weak self] in self?.showChecklist() }
         keeper.onUpdateRequested = { [weak self] in self?.updater.installLatest() }
+        updater.onChange = { [weak self] in self?.keeper.setAvailableUpdate(self?.updater.available?.version) }
         keeper.start()
         updater.start()
 

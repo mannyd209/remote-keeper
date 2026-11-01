@@ -25,6 +25,7 @@ struct Config: Codable {
     var watched: [String]?
     var phoneSeenAt: Double?     // last message from a linked phone
     var setupDone: Bool?
+    var notifiedUpdate: String?  // the newest release we already sent a notification about
 }
 
 final class Store {
@@ -71,6 +72,7 @@ final class Keeper {
     var onChange: (() -> Void)?          // called on the main queue when the menu should refresh
     var onNeedsSettings: (() -> Void)?   // called on the main queue to show the settings popup
     var onUpdateRequested: (() -> Void)? // called on the main queue: the phone asked to update this Mac
+    private(set) var availableUpdate: String?  // a newer release on GitHub, if any (only touched on `queue`)
 
     var relayConnected: Bool { relay?.connected == true }
     var phoneLinked: Bool { store.current.phoneSeenAt != nil }
@@ -158,8 +160,26 @@ final class Keeper {
             "ax": AXIsProcessTrusted(),
             "claudeSetting": claudeConnectsNewSessions() == true,
             "max": maxWatched,
+            "update": availableUpdate ?? NSNull(),
             "sessions": sessions,
         ])
+    }
+
+    // MARK: Updates
+
+    /// A newer Remote Keeper is out (or nil): show it on the phone, and send one notification per
+    /// version so you can update from there.
+    func setAvailableUpdate(_ version: String?) {
+        queue.async {
+            guard self.availableUpdate != version else { return }
+            self.availableUpdate = version
+            self.sendState()
+            guard let version, self.store.current.notifiedUpdate != version, self.phoneLinked else { return }
+            self.store.update { $0.notifiedUpdate = version }
+            let computer = Host.current().localizedName ?? "your Mac"
+            self.relay.push(["t": "alert", "kind": "update", "title": "Remote Keeper \(version) is available",
+                             "body": "For \(computer). Tap to update it from your phone.", "offline": self.offlineWatched().count])
+        }
     }
 
     // MARK: Waking
