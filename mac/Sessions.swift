@@ -1,0 +1,201 @@
+// Reading the Claude app's sessions (read-only) and waking one so its Remote Control reconnects.
+//
+// Reads (never writes) ~/Library/Application Support/Claude/claude-code-sessions/*/*/local_*.json.
+// A session turns Remote Control back on by itself once it runs one turn, so waking = open the
+// session in the Claude app and send one fixed message ("Reply only: ok"). Nothing else is ever
+// typed, and it is typed into the Claude process only.
+
+import AppKit
+import ApplicationServices
+import Foundation
+
+let claudeBundleID = "com.anthropic.claudefordesktop"
+let wakeText = "Remote Keeper: this message reconnects Remote Control for this session. Reply only: ok"
+let sessionsRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Claude/claude-code-sessions")
+
+// MARK: - Claude sessions (read-only)
+
+struct Session {
+    let id: String
+    let title: String
+    let cwd: String
+    let pinned: Bool
+    let archived: Bool
+    let lastTurn: Double   // ms since 1970
+    let turns: Int
+}
+
+func allSessions() -> [Session] {
+    let fm = FileManager.default
+    var found: [Session] = []
+    for account in (try? fm.contentsOfDirectory(atPath: sessionsRoot.path)) ?? [] {
+        let accountDir = sessionsRoot.appendingPathComponent(account)
+        for org in (try? fm.contentsOfDirectory(atPath: accountDir.path)) ?? [] {
+            let orgDir = accountDir.appendingPathComponent(org)
+            for file in (try? fm.contentsOfDirectory(atPath: orgDir.path)) ?? [] where file.hasPrefix("local_") && file.hasSuffix(".json") {
+                guard let data = try? Data(contentsOf: orgDir.appendingPathComponent(file)),
+                      let d = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      let id = d["sessionId"] as? String else { continue }
+                let lastTurn = (d["lastTurnEdgeAt"] as? Double) ?? (d["lastActivityAt"] as? Double) ?? 0
+                found.append(Session(
+                    id: id,
+                    title: (d["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled",
+                    cwd: d["cwd"] as? String ?? "",
+                    pinned: d["isStarred"] as? Bool == true,
+                    archived: d["isArchived"] as? Bool == true,
+                    lastTurn: lastTurn,
+                    turns: d["completedTurns"] as? Int ?? 0))
+            }
+        }
+    }
+    return found
+}
+
+/// Sessions you can wake: not archived, and their folder still exists.
+func liveSessions() -> [Session] {
+    allSessions()
+        .filter { !$0.archived && FileManager.default.fileExists(atPath: $0.cwd) }
+        .sorted { $0.lastTurn > $1.lastTurn }
+}
+
+func session(_ id: String) -> Session? { allSessions().first { $0.id == id } }
+
+func claudeApp() -> NSRunningApplication? {
+    NSRunningApplication.runningApplications(withBundleIdentifier: claudeBundleID).first
+}
+
+/// A session that ran a turn since the Claude app started has reconnected Remote Control by
+/// itself (with "Connect new sessions to Remote Control" on). One that hasn't is almost
+/// certainly offline.
+func likelyConnected(_ s: Session, since launch: Date?) -> Bool {
+    guard let launch else { return false }
+    return s.lastTurn / 1000 > launch.timeIntervalSince1970
+}
+
+// MARK: - Waking a session
+
+enum WakeError: Error, CustomStringConvertible {
+    case noAccessibility, locked, noSession, claudeNotRunning, noMessageBox, noReply
+
+    var description: String {
+        switch self {
+        case .noAccessibility: return "Remote Keeper needs permission to type. Open Remote Keeper on your computer and turn on Allow Typing."
+        case .locked: return "your Mac is locked, so nothing was typed. Unlock it and try again."
+        case .noSession: return "that session is gone (archived, or its folder moved)."
+        case .claudeNotRunning: return "the Claude app didn't open."
+        case .noMessageBox: return "Claude's message box didn't get focus, so nothing was typed."
+        case .noReply: return "the message was sent, but the session hasn't replied yet. Check the Claude app."
+        }
+    }
+}
+
+func screenLocked() -> Bool {
+    guard let d = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+    return (d["CGSSessionScreenIsLocked"] as? Int ?? 0) == 1 || d["CGSSessionScreenIsLocked"] as? Bool == true
+}
+
+func secondsSinceInput() -> Double {
+    [CGEventType.keyDown, .mouseMoved, .leftMouseDown, .scrollWheel]
+        .map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }
+        .min() ?? 999
+}
+
+/// True when Claude's focused element is a text box (the session's message box).
+func messageBoxFocused(_ pid: pid_t) -> Bool {
+    let app = AXUIElementCreateApplication(pid)
+    AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    var focused: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+          let element = focused else { return false }
+    var role: CFTypeRef?
+    AXUIElementCopyAttributeValue(element as! AXUIElement, kAXRoleAttribute as CFString, &role)
+    return ["AXTextArea", "AXTextField"].contains(role as? String ?? "")
+}
+
+/// Types into the Claude process only (posted to its pid, so a window that steals focus never
+/// receives it), then presses Return.
+func type(_ text: String, into pid: pid_t) {
+    let source = CGEventSource(stateID: .hidSystemState)
+    let units = Array(text.utf16)
+    var index = 0
+    while index < units.count {
+        let chunk = Array(units[index..<min(index + 16, units.count)])
+        for down in [true, false] {
+            let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down)
+            event?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+            event?.postToPid(pid)
+        }
+        index += 16
+        usleep(15_000)
+    }
+    usleep(300_000)
+    for down in [true, false] {
+        CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: down)?.postToPid(pid)
+    }
+}
+
+func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
+    guard let target = session(id), !target.archived, FileManager.default.fileExists(atPath: target.cwd) else { return .failure(.noSession) }
+    if dryRun { return .success("Would wake \(target.title) (\(id))") }
+    guard AXIsProcessTrusted() else { return .failure(.noAccessibility) }
+    guard !screenLocked() else { return .failure(.locked) }
+
+    // Give someone using the Mac a moment to pause, so the switch to Claude isn't a surprise.
+    let deadline = Date().addingTimeInterval(30)
+    while secondsSinceInput() < 8 && Date() < deadline { sleep(2) }
+
+    if claudeApp() == nil {
+        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: claudeBundleID) {
+            NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
+        }
+        for _ in 0..<30 where claudeApp() == nil { sleep(1) }
+        guard claudeApp() != nil else { return .failure(.claudeNotRunning) }
+        sleep(12)   // let it load its sessions
+    }
+    guard let app = claudeApp() else { return .failure(.claudeNotRunning) }
+
+    let before = target
+    let started = Date()
+    NSWorkspace.shared.open(URL(string: "claude://claude.ai/epitaxy/\(id)")!)
+    sleep(3)
+    app.activate()
+    var focused = false
+    for _ in 0..<5 {
+        if messageBoxFocused(app.processIdentifier) { focused = true; break }
+        sleep(1)
+    }
+    guard focused else { return .failure(.noMessageBox) }
+    type(wakeText, into: app.processIdentifier)
+    log("Sent the wake message to \(id)")
+
+    for _ in 0..<40 {
+        sleep(3)
+        if let now = session(id), now.turns > before.turns || now.lastTurn > before.lastTurn {
+            for _ in 0..<8 {
+                if remoteControlConfirmed(id, after: started) { return .success("\(target.title): Remote Control is back on.") }
+                sleep(2)
+            }
+            return .success("\(target.title) got the message, so its Remote Control should reconnect in a few seconds.")
+        }
+    }
+    return .failure(.noReply)
+}
+
+/// Claude's own log names the session when it starts a turn, then logs "Remote control enabled".
+func remoteControlConfirmed(_ id: String, after start: Date) -> Bool {
+    let logURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Claude/main.log")
+    guard let handle = try? FileHandle(forReadingFrom: logURL) else { return false }
+    defer { try? handle.close() }
+    let size = handle.seekToEndOfFile()
+    handle.seek(toFileOffset: size > 200_000 ? size - 200_000 : 0)
+    let text = String(decoding: handle.readDataToEndOfFile(), as: UTF8.self)
+    let format = DateFormatter()
+    format.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    var sawSession = false
+    for line in text.split(separator: "\n") {
+        guard let date = format.date(from: String(line.prefix(19))), date >= start.addingTimeInterval(-2) else { continue }
+        if line.contains(id) { sawSession = true } else if sawSession && line.contains("Remote control enabled") { return true }
+    }
+    return false
+}
+

@@ -1,0 +1,11 @@
+name: Feature request
+description: An idea for Remote Keeper.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: What should Remote Keeper do, and what would it help you with?
+    validations:
+      required: true

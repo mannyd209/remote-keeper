@@ -1,0 +1,27 @@
+name: Bug report
+description: Something in Remote Keeper isn't working.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Remote Keeper version (menu bar → Check for Updates shows it), macOS version, Claude app version, and your phone and browser.
+      placeholder: Remote Keeper 0.3.0, macOS 27.0, Claude 1.x, iPhone with Safari
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. …\n2. …\n3. …"
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots help. Please don't paste your QR code or its link; anyone with it can reconnect your sessions.

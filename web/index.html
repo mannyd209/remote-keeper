@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Remote Keeper</title>
+<meta name="description" content="Reconnect your Claude Code sessions' Remote Control from your phone.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Keeper">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main id="app" class="app" aria-live="polite"></main>
+
+<div id="install" class="install" hidden>
+  <div class="install-card">
+    <img src="/icons/icon-192.png" alt="" class="install-icon">
+    <div class="install-text">
+      <strong>Add Keeper to your Home Screen</strong>
+      <span id="install-how"></span>
+    </div>
+    <button id="install-button" class="pill" hidden>Install</button>
+  </div>
+  <svg id="install-arrow" class="install-arrow" viewBox="0 0 40 52" aria-hidden="true">
+    <path d="M20 3v40M6 30l14 15 14-15" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</div>
+
+<div id="toast" class="toast" role="status" hidden></div>
+<script src="/app.js" type="module"></script>
+</body>
+</html>

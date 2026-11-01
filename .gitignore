@@ -1,0 +1,4 @@
+mac/build/
+dist/
+graphify-out/
+.DS_Store
