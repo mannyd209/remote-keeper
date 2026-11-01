@@ -54,7 +54,24 @@ enum Lifeline {
             return others.isEmpty
         }
         kickstart()
-        log("Handed over to the login agent")
+        if agentRunning() { log("Handed over to the login agent"); return false }
+        // Registered but not loaded (launchd lost it): register it again.
+        log("Login agent didn't start; registering it again")
+        try? agentService.unregister()
+        try? agentService.register()
+        kickstart()
+        if agentRunning() { log("Handed over to the login agent"); return false }
+        log("Login agent still isn't running; running as a plain app")
+        return true
+    }
+
+    /// Waits up to 5 seconds for launchd's copy to be running.
+    private static func agentRunning() -> Bool {
+        for _ in 0..<25 {
+            if NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+                .contains(where: { $0.processIdentifier != getpid() }) { return true }
+            usleep(200_000)
+        }
         return false
     }
 
