@@ -32,8 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updater.start()
 
         if keeper.store.current.setupDone != true {
-            // First launch: open at login by default, then show setup.
-            try? SMAppService.mainApp.register()
+            // First launch (Lifeline already set it to open at login): show setup.
             keeper.store.update { $0.setupDone = true }
             showSetup()
         } else if !missingRequirements().isEmpty {
@@ -47,6 +46,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                             accessibilityDescription: missing ? "Remote Keeper needs a setting turned on" : "Remote Keeper")
         image?.isTemplate = true
         statusItem.button?.image = image
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Lifeline.noteCleanExit()   // Quit and updates: launchd leaves it closed (see Lifeline.swift)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -90,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item("Check for Updates…", #selector(checkUpdates)))
         }
         let login = item("Open at Login", #selector(toggleLogin))
-        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        login.state = agentService.status == .enabled ? .on : .off
         menu.addItem(login)
         menu.addItem(item("Unlink All Phones…", #selector(unlinkAll)))
         menu.addItem(.separator())
@@ -112,11 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func installUpdate() { updater.install() }
 
     @objc private func toggleLogin() {
-        do {
-            if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() } else { try SMAppService.mainApp.register() }
-        } catch {
-            log("Open at Login: \(error.localizedDescription)")
-        }
+        Lifeline.setOpenAtLogin(agentService.status != .enabled, store: keeper.store)
     }
 
     @objc private func unlinkAll() {

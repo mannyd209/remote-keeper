@@ -26,6 +26,7 @@ struct Config: Codable {
     var phoneSeenAt: Double?     // last message from a linked phone
     var setupDone: Bool?
     var notifiedUpdate: String?  // the newest release we already sent a notification about
+    var loginOff: Bool?          // you turned off Open at Login (see Lifeline.swift)
 }
 
 final class Store {
@@ -229,8 +230,11 @@ final class Keeper {
             var lastOffline = Set(self.offlineWatched())
             var quitSince: Date?
             var quitAlerted = false
-            while true {
-                sleep(10)
+            // Each pass runs in its own autorelease pool: a detached thread has none, so without it
+            // every object Foundation autoreleased here (log text, dates, session files) piled up
+            // forever, about 280 MB a minute, until macOS killed Remote Keeper for low memory.
+            func pass() {
+                Lifeline.heartbeat()
                 let computer = Host.current().localizedName ?? "your Mac"
                 let launch = claudeApp()?.launchDate
 
@@ -245,7 +249,7 @@ final class Keeper {
                                          "body": "Remote Control is off for \(n == 1 ? "your session" : "all \(n) of your sessions"). Tap to reconnect; Remote Keeper opens Claude."])
                     }
                     lastOffline = Set(self.store.watched)
-                    continue
+                    return
                 }
                 quitSince = nil
                 quitAlerted = false
@@ -258,23 +262,27 @@ final class Keeper {
                     let offline = self.offlineWatched()
                     lastOffline = Set(offline)
                     self.queue.async { self.sendState() }
-                    guard !offline.isEmpty else { continue }
+                    guard !offline.isEmpty else { return }
                     let count = offline.count == 1 ? "1 of your sessions" : "\(offline.count) of your sessions"
                     self.relay.push(["t": "alert", "title": "Claude restarted on \(computer)", "offline": offline.count,
                                      "body": "Remote Control is off for \(count). Tap to reconnect."])
-                    continue
+                    return
                 }
 
                 // A session went off (its switch, or it dropped) or came back.
                 let offline = Set(self.offlineWatched())
-                guard offline != lastOffline else { continue }
+                guard offline != lastOffline else { return }
                 let newlyOff = offline.subtracting(lastOffline).filter { id in self.queue.sync { !self.waking.contains(id) } }
                 lastOffline = offline
                 self.queue.async { self.sendState() }
-                guard !newlyOff.isEmpty else { continue }
+                guard !newlyOff.isEmpty else { return }
                 let title = newlyOff.count == 1 ? (session(newlyOff.first!)?.title ?? "A session") : "\(newlyOff.count) sessions"
                 self.relay.push(["t": "alert", "title": "Remote Control off on \(computer)", "offline": offline.count,
                                  "body": "\(title) can't be reached from your phone. Tap to reconnect."])
+            }
+            while true {
+                sleep(10)
+                autoreleasepool { pass() }
             }
         }
     }

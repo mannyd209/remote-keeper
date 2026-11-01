@@ -32,7 +32,7 @@ PY
 [ -n "${RK_RELAY_HOST:-}" ] && echo "Relay: $RK_RELAY_HOST (app key built in)" || echo "No relay built in (source build)"
 
 for arch in arm64 x86_64; do
-  swiftc -O -swift-version 5 -target "$arch-apple-macos13" Sessions.swift Relay.swift Keeper.swift Checks.swift Updater.swift AppUI.swift main.swift "$BUILD/BuildConfig.swift" -o "$BUILD/RemoteKeeper-$arch"
+  swiftc -O -swift-version 5 -target "$arch-apple-macos13" Sessions.swift Relay.swift Keeper.swift Checks.swift Updater.swift Lifeline.swift AppUI.swift main.swift "$BUILD/BuildConfig.swift" -o "$BUILD/RemoteKeeper-$arch"
 done
 lipo -create "$BUILD/RemoteKeeper-arm64" "$BUILD/RemoteKeeper-x86_64" -output "$APP/Contents/MacOS/RemoteKeeper"
 rm "$BUILD/RemoteKeeper-arm64" "$BUILD/RemoteKeeper-x86_64" "$BUILD/BuildConfig.swift"
@@ -55,6 +55,25 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHumanReadableCopyright</key><string>© 2026 MannyD Labs. Not affiliated with Anthropic.</string>
 </dict></plist>
 PLIST
+# The login agent launchd keeps alive (see Lifeline.swift): restarts it if it's killed or crashes,
+# but not after Quit (a clean exit).
+mkdir -p "$APP/Contents/Library/LaunchAgents"
+cat > "$APP/Contents/Library/LaunchAgents/com.mannydlabs.remotekeeper.agent.plist" <<AGENT
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.mannydlabs.remotekeeper.agent</string>
+  <key>BundleProgram</key><string>Contents/MacOS/RemoteKeeper</string>
+  <key>AssociatedBundleIdentifiers</key><array><string>com.mannydlabs.remotekeeper</string></array>
+  <key>EnvironmentVariables</key><dict><key>REMOTE_KEEPER_AGENT</key><string>1</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>AbandonProcessGroup</key><true/>
+</dict></plist>
+AGENT
 codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
 codesign --verify --strict "$APP"
 echo "Built: $APP ($VERSION)"

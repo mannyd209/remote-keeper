@@ -55,7 +55,7 @@ let requirements: [Requirement] = [
         detail: "In Login Items, allow Remote Keeper, so it's running after your Mac restarts.",
         button: "Open Login Items",
         // Only a problem when macOS is waiting for approval; if you turned it off yourself, that's your choice.
-        isMet: { SMAppService.mainApp.status != .requiresApproval },
+        isMet: { agentService.status != .requiresApproval },
         open: { SMAppService.openSystemSettingsLoginItems() }),
 ]
 

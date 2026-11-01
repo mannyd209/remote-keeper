@@ -99,12 +99,11 @@ struct RemoteControlStatus {
         let size = handle.seekToEndOfFile()
         handle.seek(toFileOffset: size > 3_000_000 ? size - 3_000_000 : 0)
         let text = String(decoding: handle.readDataToEndOfFile(), as: UTF8.self)
-        let format = DateFormatter()
-        format.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let since = logStamp(start.addingTimeInterval(-1))
         var events: [String: Bool] = [:]
         var recent: String?   // the session the next "Remote control enabled" belongs to
-        for line in text.split(separator: "\n") {
-            guard let date = format.date(from: String(line.prefix(19))), date >= start.addingTimeInterval(-1) else { continue }
+        for line in text.split(separator: "\n") where line.contains("emote control") || line.contains("Mapping internal session ") {
+            guard line.prefix(19) >= since else { continue }
             if let id = sessionId(after: "Enabling remote control for session ", in: line) {
                 recent = id
             } else if let id = sessionId(after: "Disabling remote control for session ", in: line) {
@@ -361,10 +360,23 @@ func claudeLogContains(_ text: String, since start: Date) -> Bool {
     defer { try? handle.close() }
     let size = handle.seekToEndOfFile()
     handle.seek(toFileOffset: size > 400_000 ? size - 400_000 : 0)
-    let format = DateFormatter()
-    format.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    let since = logStamp(start.addingTimeInterval(-1))
     for line in String(decoding: handle.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n") where line.contains(text) {
-        if let date = format.date(from: String(line.prefix(19))), date >= start.addingTimeInterval(-1) { return true }
+        if line.prefix(19) >= since { return true }
     }
     return false
 }
+
+/// A time as Claude's log writes it ("2026-11-01 08:22:05", local time). Those stamps sort as
+/// text, so lines are compared without parsing a date for each one.
+func logStamp(_ date: Date) -> String {
+    logStampFormat.lock.lock(); defer { logStampFormat.lock.unlock() }
+    return logStampFormat.formatter.string(from: date)
+}
+
+private let logStampFormat: (formatter: DateFormatter, lock: NSLock) = {
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    return (f, NSLock())
+}()

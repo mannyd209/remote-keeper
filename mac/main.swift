@@ -13,7 +13,7 @@
 import AppKit
 import Foundation
 
-let keeperVersion = "0.3.5"
+let keeperVersion = "0.3.6"
 
 let args = Array(CommandLine.arguments.dropFirst()).filter { !$0.hasPrefix("-NS") && !$0.hasPrefix("-Apple") }
 switch args.first ?? "" {
@@ -41,6 +41,9 @@ default:
     let logFile = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Remote Keeper.log")
     if isatty(STDERR_FILENO) == 0, freopen(logFile.path, "a", stderr) != nil { setvbuf(stderr, nil, _IOLBF, 0) }
     log("Remote Keeper \(keeperVersion) started")
+    let saved = (try? Data(contentsOf: configURL)).flatMap { try? JSONDecoder().decode(Config.self, from: $0) }
+    guard Lifeline.takeOver(loginOff: saved?.loginOff == true) else { exit(0) }
+    Lifeline.noteStart()
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
