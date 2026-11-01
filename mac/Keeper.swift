@@ -81,20 +81,49 @@ final class Keeper {
     func start() {
         connect()
         watchForRestarts()
+        // The relay's "will": your phone hears if this Mac goes quiet without sleeping or quitting.
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.awake = false
+            self?.relay.withdrawWill()
+        }
+        center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.awake = true
+            self?.sendWill()
+        }
+        // Refreshed every 30 minutes: phones only trust an alert for a day.
+        Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { [weak self] _ in self?.sendWill() }
     }
+
+    private var awake = true   // only touched on the main queue
+
+    /// The alert the relay sends if this Mac goes quiet (see Relay.setWill).
+    func sendWill() {
+        guard awake, relayConnected, !store.watched.isEmpty else { return }
+        let computer = Host.current().localizedName ?? "your Mac"
+        relay.setWill(["t": "alert", "kind": "offline", "title": "Remote Keeper is offline on \(computer)",
+                       "body": "It hasn't checked in for 5 minutes, so your sessions there aren't being watched. Check that the Mac is on, awake and online."])
+    }
+
+    /// Before quitting: a Mac you closed on purpose doesn't need an alert.
+    func withdrawWill() { relay?.withdrawWill() }
 
     private func connect() {
         relay = RelayConnection(keys: ChannelKeys(secret: store.secretData),
                                 onMessage: { [weak self] message in self?.queue.async { self?.handle(message) } },
                                 onState: { [weak self] up in
                                     log(up ? "Connected to the relay" : "Disconnected from the relay")
-                                    DispatchQueue.main.async { self?.onChange?() }
+                                    DispatchQueue.main.async {
+                                        if up { self?.sendWill() }
+                                        self?.onChange?()
+                                    }
                                 })
         relay.start()
     }
 
     /// A new secret: every linked phone stops working, and the QR code changes.
     func unlinkAllPhones() {
+        relay.withdrawWill()   // the old phones shouldn't hear this Mac went offline
         relay.stop()
         store.update { $0.secret = Store.newSecret(); $0.phoneSeenAt = nil }
         connect()
@@ -133,6 +162,7 @@ final class Keeper {
             for id in ids where !unique.contains(id) { unique.append(id) }
             store.update { $0.watched = Array(unique.prefix(maxWatched)) }
             sendState()
+            if unique.isEmpty { relay.withdrawWill() } else { DispatchQueue.main.async { self.sendWill() } }
         case "wake":
             let live = Set(liveSessions().map(\.id)), chosen = Set(store.watched)
             let ids = ((message["ids"] as? [String]) ?? []).filter { live.contains($0) && chosen.contains($0) && !waking.contains($0) }

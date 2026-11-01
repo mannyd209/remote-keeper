@@ -22,6 +22,7 @@ A sealed message is `base64url(nonce(12) ‖ ciphertext ‖ tag(16))` of a JSON 
 - `role=phone` comes from the web app (the official relay checks the Origin).
 - Frames are JSON. `{"m": "<sealed>"}` from a phone goes to the computer; from the computer it goes to every phone. Phones also get `{"relay":"mac","online":true|false}`. `{"t":"ping"}` is answered with `{"t":"pong"}`.
 - Restart alerts (Web Push, VAPID): a phone sends `{"push":"subscribe","sub":<PushSubscription JSON>}` or `{"push":"unsubscribe","endpoint":"…"}`; the computer sends `{"push":"<sealed>"}`, which the relay delivers as `{"c": <first 16 of channel>, "m": "<sealed>"}`. `GET /v1/vapid` returns `{"key": "<VAPID public key>"}`.
+- Offline alert (the computer's "will"): the computer sends `{"will":"<sealed alert>"}` when it connects (and every 30 minutes), and `{"will":"off"}` before it sleeps or quits. If its socket closes while a will is stored and it doesn't reconnect within 5 minutes, the relay sends that sealed alert once, like a `push`.
 
 ## Messages (inside the sealed envelope)
 

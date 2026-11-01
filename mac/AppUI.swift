@@ -49,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        keeper.withdrawWill()      // closed on purpose: no "offline" alert on your phone
         Lifeline.noteCleanExit()   // Quit and updates: launchd leaves it closed (see Lifeline.swift)
     }
 

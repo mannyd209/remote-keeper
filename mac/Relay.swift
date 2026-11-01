@@ -199,6 +199,23 @@ final class RelayConnection: NSObject, URLSessionWebSocketDelegate {
         frame(["push": sealed])
     }
 
+    /// Hands the relay a sealed alert to send to your phones if this Mac goes quiet for 5 minutes
+    /// without withdrawing it (killed, crashed, lost power or network).
+    func setWill(_ message: [String: Any]) {
+        guard let sealed = keys.seal(message) else { return }
+        frame(["will": sealed])
+    }
+
+    /// Withdraws it before sleeping or quitting. Waits up to a second, so it goes out before the app exits.
+    func withdrawWill() {
+        let sent = DispatchSemaphore(value: 0)
+        queue.async {
+            guard let task = self.task else { sent.signal(); return }
+            task.send(.string(#"{"will":"off"}"#)) { _ in sent.signal() }
+        }
+        _ = sent.wait(timeout: .now() + 1)
+    }
+
     private func frame(_ object: [String: Any]) {
         queue.async {
             guard let task = self.task, let data = try? JSONSerialization.data(withJSONObject: object),
