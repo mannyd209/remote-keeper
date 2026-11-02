@@ -116,9 +116,9 @@ Reconnecting with /remote-control uses no Claude usage. Only the fallback messag
 
 ## More from MannyD Labs
 
-<a href="https://github.com/mannyd209/codemi"><img src="https://raw.githubusercontent.com/mannyd209/codemi/main/docs/banner.jpg" alt="CodeMi" width="100%"></a>
+<a href="https://apps.apple.com/us/app/codemi-kimi-code-remote/id6828491801"><img src="https://raw.githubusercontent.com/mannyd209/codemi/main/docs/banner.jpg" alt="CodeMi" width="100%"></a>
 
-**Use Kimi Code too?** [CodeMi](https://github.com/mannyd209/codemi) is a free iPhone and iPad remote for Kimi Code, from the same lab. Like Remote Keeper, it can turn Remote Control back on when an update switches it off.
+**Use Kimi Code too?** [CodeMi](https://apps.apple.com/us/app/codemi-kimi-code-remote/id6828491801) is a free iPhone and iPad remote for Kimi Code, from the same lab, [on the App Store](https://apps.apple.com/us/app/codemi-kimi-code-remote/id6828491801) ([GitHub](https://github.com/mannyd209/codemi)). Like Remote Keeper, it can turn Remote Control back on when an update switches it off.
 
 ## Support
 
