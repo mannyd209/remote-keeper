@@ -60,19 +60,19 @@ When you tap **Reconnect** on your phone, Remote Keeper opens that session in th
 
 ## iPhone app
 
-The native iPhone app is [free on the App Store](https://apps.apple.com/us/app/remote-keeper/id6829386828): no session limit, a **Reconnect** button right in the notification, Home Screen and Lock Screen widgets, Siri and Shortcuts, Face ID lock, and your computers synced with iCloud. It works with the same Mac app.
+The native iPhone app is [free on the App Store](https://apps.apple.com/us/app/remote-keeper/id6829386828): no session limit, a **Reconnect** button right in the notification, Home Screen and Lock Screen widgets, Siri and Shortcuts, Face ID lock, new sessions that show up on their own, and your computers synced with iCloud. It works with the same Mac app.
 
 <p align="center">
-  <img src="docs/screenshots/iphone/01-reconnect.jpg" alt="iPhone app: offline sessions with one Reconnect button" width="250">
-  <img src="docs/screenshots/iphone/02-alert.jpg" alt="iPhone app: Reconnect right from the alert" width="250">
-  <img src="docs/screenshots/iphone/03-connected.jpg" alt="iPhone app: every session back online" width="250">
+  <img src="docs/screenshots/iphone/01-reconnect.jpg" alt="iPhone app: offline sessions with one Reconnect button" width="200">
+  <img src="docs/screenshots/iphone/02-new.jpg" alt="iPhone app: new sessions show up, with one tap to add them" width="200">
+  <img src="docs/screenshots/iphone/03-alert.jpg" alt="iPhone app: Reconnect right from the alert" width="200">
+  <img src="docs/screenshots/iphone/04-connected.jpg" alt="iPhone app: every session back online" width="200">
 </p>
 <p align="center">
-  <img src="docs/screenshots/iphone/04-choose.jpg" alt="iPhone app: choose any sessions on every Mac" width="250">
-  <img src="docs/screenshots/iphone/05-widgets.jpg" alt="iPhone app: widgets and Siri" width="250">
-  <img src="docs/screenshots/iphone/06-private.jpg" alt="iPhone app: no account, locked with Face ID" width="250">
+  <img src="docs/screenshots/iphone/05-choose.jpg" alt="iPhone app: choose any sessions on every Mac" width="200">
+  <img src="docs/screenshots/iphone/06-widgets.jpg" alt="iPhone app: widgets and Siri" width="200">
+  <img src="docs/screenshots/iphone/07-private.jpg" alt="iPhone app: no account, locked with Face ID" width="200">
 </p>
-
 ## Install
 
 1. **[Download Remote Keeper for Mac](https://github.com/mannyd209/remote-keeper/releases/latest/download/Remote-Keeper.dmg)**, open the DMG and drag **Remote Keeper** to **Applications**. Open it; it lives in your menu bar.
