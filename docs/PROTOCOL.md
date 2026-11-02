@@ -26,6 +26,6 @@ A sealed message is `base64url(nonce(12) ‖ ciphertext ‖ tag(16))` of a JSON 
 
 ## Messages (inside the sealed envelope)
 
-Phone → computer: `{t:"hello"}`, `{t:"choices"}`, `{t:"set", ids:[…]}` (up to 10), `{t:"wake", ids:[…]}`, `{t:"settings"}` (shows the settings popup).
+Phone → computer: `{t:"hello"}`, `{t:"choices"}`, `{t:"set", ids:[…]}` (up to 10), `{t:"wake", ids:[…]}`, `{t:"settings"}` (shows the settings popup), `{t:"seen", ids:[…]}` (stop offering these new sessions, 0.3.7+), `{t:"prefs", alertNew:true|false}` (new-session alerts, 0.3.7+).
 
-Computer → phone: `{t:"state", mac:{name,version}, claude:{running,since}, locked, ax, claudeSetting, max, sessions:[{id,title,pinned,last,on,waking}]}`, `{t:"choices", sessions:[…]}`, `{t:"result", id, ok, text}`, and (pushed) `{t:"alert", title, body, offline}`.
+Computer → phone: `{t:"state", mac:{name,version}, claude:{running,since}, locked, ax, claudeSetting, max, sessions:[{id,title,pinned,last,on,waking}], new:[{id,title,pinned,last}], alertNew}` (`new` and `alertNew` since 0.3.7; `state` is also sent when a chosen session is renamed or a new one appears), `{t:"choices", sessions:[…]}`, `{t:"result", id, ok, text}`, and (pushed) `{t:"alert", title, body, offline, kind}` (`kind`: none for sessions going offline, `"offline"`, `"update"` or `"new"`).

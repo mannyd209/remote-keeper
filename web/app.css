@@ -87,6 +87,8 @@ h1 { font-size: 30px; line-height: 1.15; margin: 0; letter-spacing: -0.02em; ove
 .pill[disabled] { opacity: 0.45; }
 .empty { padding: 28px 16px; text-align: center; color: var(--muted); font-size: 15px; }
 .hint { margin: 10px 4px 0; color: var(--muted); font-size: 13px; }
+.row.new .dot { background: var(--accent); }
+.new-actions { display: flex; justify-content: flex-end; gap: 22px; margin: 10px 4px 0; }
 
 .list-head { display: flex; align-items: baseline; justify-content: space-between; margin: 24px 4px 8px; }
 .list-head h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }

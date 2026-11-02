@@ -288,6 +288,14 @@ function savePicker() {
   scrollTo(0, 0);
 }
 
+/** Adds sessions from the "New sessions" card to your chosen ones (up to the web app's limit). */
+function addNew(ids) {
+  const l = link();
+  const mine = (l?.snapshot?.sessions || []).map((s) => s.id);
+  const room = Math.max(0, WEB_MAX - mine.length);
+  l?.send({ t: "set", ids: [...mine, ...ids.slice(0, room)] });
+}
+
 // MARK: - Rendering
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -313,6 +321,22 @@ function row(s, l) {
     <div class="body"><div class="name">${esc(s.title)}${pin(s)}</div><div class="meta">${meta}</div></div>
     ${action}
   </li>`;
+}
+
+/** Sessions made on this computer since you last looked: add them with a tap, or not now. */
+function newSessionsCard(snap) {
+  const fresh = snap.new || [];
+  if (!fresh.length) return "";
+  const full = snap.sessions.length >= WEB_MAX;
+  const rows = fresh
+    .map((s) => `<li class="row new"><span class="dot" aria-hidden="true"></span>
+      <div class="body"><div class="name">${esc(s.title)}${pin(s)}</div><div class="meta">New · ${ago(s.last)}</div></div>
+      ${full ? "" : `<button class="pill" data-add="${esc(s.id)}">Add</button>`}</li>`)
+    .join("");
+  return `<div class="list-head"><h2>New sessions on ${esc(displayName(computer()))}</h2></div>
+    <ul class="list">${rows}</ul>
+    <div class="new-actions">${fresh.length > 1 && !full ? '<button class="text-button bold" id="add-all-new">Add All</button>' : ""}<button class="text-button" id="dismiss-new">Not Now</button></div>
+    ${full ? `<p class="hint">Your list is full (${WEB_MAX} sessions in the web app). Remove one under Edit to add a new one.</p>` : ""}`;
 }
 
 /** The row of computers at the top: tap one to switch to it. */
@@ -368,6 +392,7 @@ function render() {
     if (snap.locked) notices.push("This computer is locked, so sessions can't be reconnected until it's unlocked.");
     html += notices.map((n) => `<div class="notice">${n}</div>`).join("");
 
+    html += newSessionsCard(snap);
     const mine = snap.sessions;
     const offline = mine.filter((s) => !s.on && !s.waking && !l.pending.has(s.id));
     if (!mine.length) {
@@ -555,6 +580,12 @@ app.addEventListener("click", async (event) => {
     if (state.picked.has(id)) state.picked.delete(id);
     else if (state.picked.size < (WEB_MAX)) state.picked.add(id);
     render();
+  } else if (target.dataset.add) {
+    addNew([target.dataset.add]);
+  } else if (target.id === "add-all-new") {
+    addNew((link()?.snapshot?.new || []).map((s) => s.id));
+  } else if (target.id === "dismiss-new") {
+    link()?.send({ t: "seen", ids: (link()?.snapshot?.new || []).map((s) => s.id) });
   } else if (target.id === "choose") {
     openPicker();
   } else if (target.id === "pick-done") {
@@ -807,20 +838,30 @@ function startDemo() {
   const now = Date.now();
   const make = (title, minutes, on, pinned = false) => ({ id: title, title, last: now - minutes * 60000, on, pinned, waking: false });
   const demo = [
-    { channel: "demo-studio", name: "Studio MacBook Pro", offline: 2, sessions: [make("Weather app: hourly forecast", 4, true, true), make("Landing page redesign", 38, true), make("API rate limiter", 190, false, true), make("Release notes 2.4", 1500, false)] },
+    { channel: "demo-studio", name: "Studio MacBook Pro", offline: 2, new: [make("Checkout flow tests", 3, true)], sessions: [make("Weather app: hourly forecast", 4, true, true), make("Landing page redesign", 38, true), make("API rate limiter", 190, false, true), make("Release notes 2.4", 1500, false)] },
     { channel: "demo-home", name: "Home Mac mini", offline: 0, sessions: [make("Recipe box iOS", 12, true, true), make("Photo backup script", 75, true)] },
   ];
   state.computers = demo.map(({ channel, name, offline }) => ({ channel, name, offline, secret: "" }));
   for (const d of demo) {
     const l = { channel: d.channel, macOnline: true, pending: new Set(), hello() {}, close() {}, socket: null };
-    l.snapshot = { t: "state", mac: { name: d.name, version: "0.3.1" }, max: 10, locked: false, ax: true, claudeSetting: true, claude: { running: true, since: now - 7 * 60000 }, sessions: d.sessions };
+    l.snapshot = { t: "state", mac: { name: d.name, version: "0.3.1" }, max: 10, locked: false, ax: true, claudeSetting: true, claude: { running: true, since: now - 7 * 60000 }, sessions: d.sessions, new: d.new || [] };
     l.send = async (m) => {
       if (m.t === "choices") {
         const extra = ["Onboarding emails", "Invoice PDF export", "Dark mode polish", "Search indexing", "Docs site", "Bug bash: login"];
         state.choices = [...d.sessions, ...extra.map((t, i) => make(t, 300 + i * 900, false))].sort((a, b) => b.last - a.last);
         setTimeout(render, 0);
       }
-      if (m.t === "set") d.sessions = d.sessions.filter((s) => m.ids.includes(s.id));
+      if (m.t === "set") {
+        const pool = [...d.sessions, ...l.snapshot.new];
+        d.sessions = m.ids.map((id) => pool.find((s) => s.id === id)).filter(Boolean);
+        l.snapshot.new = l.snapshot.new.filter((s) => !m.ids.includes(s.id));
+        l.snapshot.sessions = d.sessions;
+        setTimeout(render, 0);
+      }
+      if (m.t === "seen") {
+        l.snapshot.new = [];
+        setTimeout(render, 0);
+      }
       if (m.t === "wake") {
         for (const id of m.ids) {
           const s = d.sessions.find((x) => x.id === id);

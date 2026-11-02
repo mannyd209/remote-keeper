@@ -1,6 +1,7 @@
 // What the phone can ask for, and the alerts. The phone can only: get the status of your chosen
 // sessions, list sessions to choose from, choose up to 10, ask to reconnect chosen ones, show the
-// settings popup, and install the latest signed update. Waking always sends the same fixed
+// settings popup, install the latest signed update, mark new sessions as seen, and turn new-session
+// alerts on or off. Waking always sends the same fixed
 // message, so nothing a phone sends is ever typed or run on this computer.
 
 import AppKit
@@ -27,6 +28,8 @@ struct Config: Codable {
     var setupDone: Bool?
     var notifiedUpdate: String?  // the newest release we already sent a notification about
     var loginOff: Bool?          // you turned off Open at Login (see Lifeline.swift)
+    var known: [String]?         // sessions your phone has already been told about (new ones show up on it)
+    var alertNew: Bool?          // also send a notification for a new session (a phone's setting; off by default)
 }
 
 final class Store {
@@ -79,6 +82,13 @@ final class Keeper {
     var phoneLinked: Bool { store.current.phoneSeenAt != nil }
 
     func start() {
+        // The first run counts every existing session as known, so only sessions made from now on
+        // show up as new.
+        let existing = allSessions().map(\.id)
+        store.update { config in
+            let exists = Set(existing)
+            config.known = config.known.map { $0.filter(exists.contains) } ?? existing   // forget deleted sessions
+        }
         connect()
         watchForRestarts()
         // The relay's "will": your phone hears if this Mac goes quiet without sleeping or quitting.
@@ -161,9 +171,19 @@ final class Keeper {
             let ids = ((message["ids"] as? [String]) ?? []).filter { live.contains($0) }
             var unique: [String] = []
             for id in ids where !unique.contains(id) { unique.append(id) }
-            store.update { $0.watched = Array(unique.prefix(maxWatched)) }
+            store.update { $0.watched = Array(unique.prefix(maxWatched)); $0.known = Array(Set(($0.known ?? []) + unique)) }
             sendState()
             if unique.isEmpty { relay.withdrawWill() } else { DispatchQueue.main.async { self.sendWill() } }
+        case "seen":
+            // "Not now" on the phone's new-sessions card: stop offering these.
+            let ids = ((message["ids"] as? [String]) ?? []).prefix(maxWatched)
+            store.update { $0.known = Array(Set(($0.known ?? []) + ids)) }
+            sendState()
+        case "prefs":
+            if let on = message["alertNew"] as? Bool {
+                store.update { $0.alertNew = on }
+                sendState()
+            }
         case "wake":
             let live = Set(liveSessions().map(\.id)), chosen = Set(store.watched)
             let ids = ((message["ids"] as? [String]) ?? []).filter { live.contains($0) && chosen.contains($0) && !waking.contains($0) }
@@ -194,7 +214,24 @@ final class Keeper {
             "max": maxWatched,
             "update": availableUpdate ?? NSNull(),
             "sessions": sessions,
+            "new": newSessions().map { s in ["id": s.id, "title": String(s.title.prefix(120)), "pinned": s.pinned, "last": Int(s.lastTurn)] },
+            "alertNew": store.current.alertNew == true,
         ])
+    }
+
+    /// Sessions made since your phone last looked: not chosen, not archived, folder still there, and
+    /// past their first turn (so Claude has named them). Newest first, at most 10.
+    func newSessions() -> [Session] {
+        let known = Set(store.current.known ?? []), watched = Set(store.watched)
+        return Array(liveSessions().filter { $0.turns > 0 && !known.contains($0.id) && !watched.contains($0.id) }.prefix(10))
+    }
+
+    /// What the phone shows that can change without any session dropping: your chosen sessions'
+    /// names and pins, and the new sessions. When it changes, the phone hears right away.
+    func shownSignature() -> String {
+        let live = Dictionary(liveSessions().map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let chosen = store.watched.compactMap { live[$0] }.map { "\($0.id)\u{1}\($0.title)\u{1}\($0.pinned)" }
+        return (chosen + ["|"] + newSessions().map { "\($0.id)\u{1}\($0.title)" }).joined(separator: "\u{2}")
     }
 
     // MARK: Updates
@@ -259,6 +296,8 @@ final class Keeper {
         Thread.detachNewThread {
             var lastLaunch = claudeApp()?.launchDate
             var lastOffline = Set(self.offlineWatched())
+            var lastShown = self.shownSignature()
+            var lastNew = Set(self.newSessions().map(\.id))
             var quitSince: Date?
             var quitAlerted = false
             // Each pass runs in its own autorelease pool: a detached thread has none, so without it
@@ -284,6 +323,21 @@ final class Keeper {
                 }
                 quitSince = nil
                 quitAlerted = false
+
+                // A chosen session was renamed or pinned, or a new session appeared: tell the phone.
+                let shown = self.shownSignature()
+                if shown != lastShown {
+                    lastShown = shown
+                    self.queue.async { self.sendState() }
+                    let fresh = self.newSessions()
+                    let added = fresh.filter { !lastNew.contains($0.id) }
+                    lastNew = Set(fresh.map(\.id))
+                    if !added.isEmpty, self.store.current.alertNew == true, self.phoneLinked {
+                        let title = added.count == 1 ? "\u{201C}\(added[0].title)\u{201D}" : "\(added.count) new sessions"
+                        self.relay.push(["t": "alert", "kind": "new", "title": "New session on \(computer)",
+                                         "body": "\(title). Tap to keep \(added.count == 1 ? "it" : "them") connected."])
+                    }
+                }
 
                 // Claude restarted: every session dropped. Give it a moment, then report.
                 if launch != lastLaunch {
