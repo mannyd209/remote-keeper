@@ -221,17 +221,17 @@ final class Keeper {
 
     /// Sessions made since your phone last looked: not chosen, not archived, folder still there, and
     /// past their first turn (so Claude has named them). Newest first, at most 10.
-    func newSessions() -> [Session] {
+    func newSessions(from live: [Session]? = nil) -> [Session] {
         let known = Set(store.current.known ?? []), watched = Set(store.watched)
-        return Array(liveSessions().filter { $0.turns > 0 && !known.contains($0.id) && !watched.contains($0.id) }.prefix(10))
+        return Array((live ?? liveSessions()).filter { $0.turns > 0 && !known.contains($0.id) && !watched.contains($0.id) }.prefix(10))
     }
 
     /// What the phone shows that can change without any session dropping: your chosen sessions'
     /// names and pins, and the new sessions. When it changes, the phone hears right away.
-    func shownSignature() -> String {
-        let live = Dictionary(liveSessions().map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+    func shownSignature(_ sessions: [Session]) -> String {
+        let live = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let chosen = store.watched.compactMap { live[$0] }.map { "\($0.id)\u{1}\($0.title)\u{1}\($0.pinned)" }
-        return (chosen + ["|"] + newSessions().map { "\($0.id)\u{1}\($0.title)" }).joined(separator: "\u{2}")
+        return (chosen + ["|"] + newSessions(from: sessions).map { "\($0.id)\u{1}\($0.title)" }).joined(separator: "\u{2}")
     }
 
     // MARK: Updates
@@ -295,9 +295,12 @@ final class Keeper {
     private func watchForRestarts() {
         Thread.detachNewThread {
             var lastLaunch = claudeApp()?.launchDate
-            var lastOffline = Set(self.offlineWatched())
-            var lastShown = self.shownSignature()
-            var lastNew = Set(self.newSessions().map(\.id))
+            var lastOffline = autoreleasepool { Set(self.offlineWatched()) }
+            // Read inside a pool too: this thread has none of its own (see pass()).
+            var (lastShown, lastNew) = autoreleasepool { () -> (String, Set<String>) in
+                let live = liveSessions()
+                return (self.shownSignature(live), Set(self.newSessions(from: live).map(\.id)))
+            }
             var quitSince: Date?
             var quitAlerted = false
             // Each pass runs in its own autorelease pool: a detached thread has none, so without it
@@ -325,11 +328,12 @@ final class Keeper {
                 quitAlerted = false
 
                 // A chosen session was renamed or pinned, or a new session appeared: tell the phone.
-                let shown = self.shownSignature()
+                let live = liveSessions()
+                let shown = self.shownSignature(live)
                 if shown != lastShown {
                     lastShown = shown
                     self.queue.async { self.sendState() }
-                    let fresh = self.newSessions()
+                    let fresh = self.newSessions(from: live)
                     let added = fresh.filter { !lastNew.contains($0.id) }
                     lastNew = Set(fresh.map(\.id))
                     if !added.isEmpty, self.store.current.alertNew == true, self.phoneLinked {
