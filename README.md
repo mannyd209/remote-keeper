@@ -13,7 +13,7 @@
 <p align="center">
   <a href="https://github.com/mannyd209/remote-keeper/releases/latest/download/Remote-Keeper.dmg"><img src="https://img.shields.io/badge/Download%20for%20Mac-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Mac" height="44"></a>
   &nbsp;
-  <a href="https://apps.apple.com/us/app/remote-keeper/id6829386828"><img src="docs/app-store-badge.svg" alt="Download on the App Store" height="44"></a>
+  <a href="https://apps.apple.com/us/app/remote-keeper-for-claude-code/id6829386828"><img src="docs/app-store-badge.svg" alt="Download on the App Store" height="44"></a>
   &nbsp;
   <img src="https://img.shields.io/badge/Windows-coming%20soon-555555?style=for-the-badge&logo=windows&logoColor=white" alt="Windows: coming soon" height="44">
   &nbsp;
@@ -60,7 +60,7 @@ When you tap **Reconnect** on your phone, Remote Keeper opens that session in th
 
 ## iPhone app
 
-The native iPhone app is [free on the App Store](https://apps.apple.com/us/app/remote-keeper/id6829386828): no session limit, a **Reconnect** button right in the notification, Home Screen and Lock Screen widgets, Siri and Shortcuts, Face ID lock, new sessions that show up on their own, and your computers synced with iCloud. It works with the same Mac app.
+The native iPhone app is [free on the App Store](https://apps.apple.com/us/app/remote-keeper-for-claude-code/id6829386828): no session limit, a **Reconnect** button right in the notification, Home Screen and Lock Screen widgets, Siri and Shortcuts, Face ID lock, new sessions that show up on their own, and your computers synced with iCloud. It works with the same Mac app.
 
 <p align="center">
   <img src="docs/screenshots/iphone/01-reconnect.jpg" alt="iPhone app: offline sessions with one Reconnect button" width="200">
@@ -104,7 +104,7 @@ Reconnecting with /remote-control uses no Claude usage. Only the fallback messag
 
 ## FAQ
 
-**Is there an iPhone app?** Yes, it's [free on the App Store](https://apps.apple.com/us/app/remote-keeper/id6829386828) ([screenshots](#iphone-app)). The web app stays, for Android and for anyone who'd rather not install anything.
+**Is there an iPhone app?** Yes, it's [free on the App Store](https://apps.apple.com/us/app/remote-keeper-for-claude-code/id6829386828) ([screenshots](#iphone-app)). The web app stays, for Android and for anyone who'd rather not install anything.
 
 **What if my Mac goes offline?** If Remote Keeper on your Mac stops checking in for 5 minutes (not because the Mac went to sleep or you quit it), your phone gets an alert. And if macOS ever closes Remote Keeper, it restarts itself within seconds.
 
