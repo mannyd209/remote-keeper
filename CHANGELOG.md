@@ -2,7 +2,7 @@
 
 ## 0.3.8
 
-- Never types into a session that's replying: if you tap Reconnect while a session is in the middle of a turn, Remote Keeper waits up to 2 minutes for the turn to finish before running /remote-control (finishing a turn often reconnects it by itself). If it's still busy after that, nothing is typed and your phone says to try again once it's done.
+- Never types into a session that's replying: if you tap Reconnect while a session is in the middle of a turn, Remote Keeper waits up to 2 minutes for the turn to finish before running /remote-control (finishing a turn often reconnects it by itself). If it's still busy after that, nothing is typed and your phone says to try again once it's done. Thanks to u/akhi1uuu on Reddit for spotting this.
 
 ## 0.3.7
 
