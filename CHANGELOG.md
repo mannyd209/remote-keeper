@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.7
+
+- New sessions show up on your phone: when you start a Claude Code session on your Mac, the iPhone app and the web app show it under "New on your Mac" with one tap to add it. Not Now hides it.
+- Renamed sessions update on your phone within seconds.
+- Optional alert for new sessions in the iPhone app (1.1: Settings → Notifications → New Sessions). Off by default.
+- Memory checked: a 4,000-check soak test (about 11 hours) stayed flat at about 20 MB.
+
+## 0.3.6
+
+- Fixes a memory leak: the restart watcher never freed what it read, so it could grow until macOS closed it for low memory. It now stays around 20 MB and only re-reads session files that changed.
+- Stays running: it runs as a login item that macOS restarts within seconds if it's ever closed by the system or crashes. Quit from the menu still closes it.
+- Offline alert: if Remote Keeper on your Mac goes quiet for 5 minutes without sleeping or being quit, your phone gets "Remote Keeper is offline on your Mac".
+- If it ever goes over 400 MB it restarts itself, and the log notes when a previous run stopped unexpectedly.
+
 ## 0.3.5
 
 - No limit on how many sessions a computer keeps connected (the web app still lets you choose 10 per computer; the upcoming iPhone app, any number). Reconnect All handles up to 50 at a time.
