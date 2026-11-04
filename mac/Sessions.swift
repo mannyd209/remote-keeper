@@ -26,6 +26,7 @@ struct Session {
     let pinned: Bool
     let archived: Bool
     let lastTurn: Double   // ms since 1970
+    let lastActivity: Double // ms since 1970; keeps moving while a turn is running
     let turns: Int
     let userEnabled: Bool? // Claude's per-session Remote Control switch (nil: never set)
 }
@@ -92,6 +93,7 @@ private final class SessionCache {
             pinned: d["isStarred"] as? Bool == true,
             archived: d["isArchived"] as? Bool == true,
             lastTurn: lastTurn,
+            lastActivity: (d["lastActivityAt"] as? Double) ?? lastTurn,
             turns: d["completedTurns"] as? Int ?? 0,
             userEnabled: d["remoteControlUserEnabled"] as? Bool)
     }
@@ -171,8 +173,49 @@ struct RemoteControlStatus {
 
 // MARK: - Waking a session
 
+/// Whether a session is in the middle of a turn, from Claude's log since Claude started: a turn
+/// begins with "Sending message to session X" (or "Mapping internal session X") and ends with
+/// "Query completed for session X". A start without an end only counts while the session file
+/// shows activity in the last 2 minutes, in case a stopped turn never logged its end.
+func turnInProgress(_ id: String) -> Bool {
+    guard let launch = claudeApp()?.launchDate,
+          let handle = try? FileHandle(forReadingFrom: claudeLog) else { return false }
+    defer { try? handle.close() }
+    let size = handle.seekToEndOfFile()
+    handle.seek(toFileOffset: size > 1_000_000 ? size - 1_000_000 : 0)
+    let since = logStamp(launch.addingTimeInterval(-1))
+    var running = false
+    autoreleasepool {
+        for line in String(decoding: handle.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n") where line.contains(id) {
+            guard line.prefix(19) >= since else { continue }
+            if line.contains("Query completed for session \(id)") { running = false }
+            else if line.contains("Sending message to session \(id)") || line.contains("Mapping internal session \(id)") { running = true }
+        }
+    }
+    guard running, let s = session(id) else { return false }
+    return Date().timeIntervalSince1970 - s.lastActivity / 1000 < 120
+}
+
+/// Waits up to 2 minutes for a session that's in the middle of a turn to finish, so nothing is
+/// ever typed into a session while it's replying. False if it's still busy.
+func waitForTurnToFinish(_ id: String) -> Bool {
+    guard turnInProgress(id) else { return true }
+    log("Wake \(id): it's in the middle of a turn; waiting for it to finish")
+    let deadline = Date().addingTimeInterval(120)
+    while Date() < deadline {
+        sleep(3)
+        if !turnInProgress(id) {
+            log("Wake \(id): its turn finished")
+            sleep(2)
+            return true
+        }
+    }
+    log("Wake \(id): still busy after 2 minutes; nothing typed")
+    return false
+}
+
 enum WakeError: Error, CustomStringConvertible {
-    case noAccessibility, locked, noSession, claudeNotRunning, noMessageBox, noReply
+    case noAccessibility, locked, noSession, claudeNotRunning, noMessageBox, noReply, busy
 
     var description: String {
         switch self {
@@ -182,6 +225,7 @@ enum WakeError: Error, CustomStringConvertible {
         case .claudeNotRunning: return "the Claude app didn't open."
         case .noMessageBox: return "Claude's message box didn't get focus, so nothing was typed."
         case .noReply: return "Remote Control didn't come back on. Check the session in the Claude app."
+        case .busy: return "it's still working on a reply, so nothing was typed. Tap Reconnect again once it's done."
         }
     }
 }
@@ -310,6 +354,11 @@ func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
     let deadline = Date().addingTimeInterval(30)
     while secondsSinceInput() < 8 && Date() < deadline { sleep(2) }
 
+    // Never type into a session that's replying: wait for its turn to end. Finishing a turn
+    // often reconnects it by itself.
+    guard waitForTurnToFinish(id) else { return .failure(.busy) }
+    if RemoteControlStatus.now().isOn(session(id) ?? target) { return .success("\(target.title): Remote Control is back on.") }
+
     if claudeApp() == nil {
         bringClaudeForward()
         for _ in 0..<30 where claudeApp() == nil { sleep(1) }
@@ -331,7 +380,12 @@ func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
         log("Wake \(id): no message box focus (front app: \(front), Claude active: \(app.isActive))")
         return .failure(.noMessageBox)
     }
-    // Check again right before typing: /remote-control switches it off if it's already on.
+    // Check again right before typing: a turn may have started meanwhile, and /remote-control
+    // switches Remote Control off if it's already on.
+    if turnInProgress(id) {
+        guard waitForTurnToFinish(id) else { return .failure(.busy) }
+        guard focusMessageBox(app.processIdentifier) else { return .failure(.noMessageBox) }
+    }
     if RemoteControlStatus.now().isOn(session(id) ?? target) { return .success("\(target.title): Remote Control is already on.") }
 
     // 1. Claude's own /remote-control command: no Claude usage, and it also works when the

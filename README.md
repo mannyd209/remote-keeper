@@ -110,6 +110,8 @@ Reconnecting with /remote-control uses no Claude usage. Only the fallback messag
 
 **Windows?** Coming soon.
 
+**What if a session is still replying when I tap Reconnect?** Remote Keeper never types into a session in the middle of a turn. It waits up to 2 minutes for the turn to finish (which often reconnects it by itself), then runs /remote-control. If it's still busy after that, nothing is typed and your phone tells you to try again once it's done.
+
 **Why does the Mac need to be unlocked?** Remote Keeper types into the Claude app the same way you would, and macOS doesn't allow typing into a locked screen.
 
 **Can I build it myself?** Yes, the Mac app and the web app are here under the MIT license. (The iPhone app is closed source.) Builds from source don't include our relay or its key (official releases are the only builds that can use it), so to run your own you need your own relay that speaks the same protocol: see [`docs/PROTOCOL.md`](docs/PROTOCOL.md), then set `REMOTE_KEEPER_HOST` and `REMOTE_KEEPER_APP_KEY`. Build with `mac/build.sh`.

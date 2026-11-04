@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.8
+
+- Never types into a session that's replying: if you tap Reconnect while a session is in the middle of a turn, Remote Keeper waits up to 2 minutes for the turn to finish before running /remote-control (finishing a turn often reconnects it by itself). If it's still busy after that, nothing is typed and your phone says to try again once it's done.
+
 ## 0.3.7
 
 - New sessions show up on your phone: when you start a Claude Code session on your Mac, the iPhone app and the web app show it under "New on your Mac" with one tap to add it. Not Now hides it.
