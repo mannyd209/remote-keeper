@@ -428,6 +428,7 @@ final class Keeper {
             }
             var quitSince: Date?
             var quitAlerted = false
+            var updateCheckedAt = Date.distantPast
             var restartAlertAt: Date?
             // Each pass runs in its own autorelease pool: a detached thread has none, so without it
             // every object Foundation autoreleased here (log text, dates, session files) piled up
@@ -453,6 +454,23 @@ final class Keeper {
                 }
                 quitSince = nil
                 quitAlerted = false
+
+                // Claude downloaded an update: it installs when Claude restarts, which drops every
+                // session, and Claude does that by itself some hours later. Say so once per version,
+                // so it can be installed from the phone instead (Install Now reconnects everything).
+                if Date().timeIntervalSince(updateCheckedAt) > 120 {
+                    updateCheckedAt = Date()
+                    if let update = claudeUpdateReady(), UserDefaults.standard.string(forKey: "claudeUpdateAlerted") != update {
+                        UserDefaults.standard.set(update, forKey: "claudeUpdateAlerted")
+                        log("Claude \(update) is ready to install")
+                        self.queue.async { self.sendState() }
+                        if self.phoneLinked {
+                            self.relay.push(["t": "alert", "kind": "claudeUpdate", "version": update,
+                                             "title": "Claude \(update) is ready on \(computer)",
+                                             "body": "Install it now and Remote Keeper brings your sessions right back. Otherwise Claude restarts by itself later and they go offline."])
+                        }
+                    }
+                }
 
                 // A chosen session was renamed or pinned, or a new session appeared: tell the phone.
                 let live = liveSessions()
