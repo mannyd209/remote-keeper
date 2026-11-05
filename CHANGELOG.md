@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.12
+
+- Jump straight into a session: your phone now gets each session's claude.ai session id (the one Claude saves once Remote Control has connected it), so the iPhone app can open that exact session in the Claude app with one tap. Read-only, from Claude's own session files.
+
 ## 0.3.11
 
 - Much faster Reconnect All: sessions Claude hasn't started since a restart now get their wake message and Remote Keeper moves straight on to the next one, while Claude turns Remote Control back on by itself (about a second each). It confirms each one from Claude's log and gives any stragglers a second try at the end. About 1–2 seconds per session instead of 10–15.

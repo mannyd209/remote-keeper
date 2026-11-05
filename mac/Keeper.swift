@@ -201,8 +201,10 @@ final class Keeper {
         let launch = status.launch
         let live = Dictionary(liveSessions().map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let sessions: [[String: Any]] = store.watched.compactMap { live[$0] }.map { s in
-            ["id": s.id, "title": String(s.title.prefix(120)), "pinned": s.pinned, "last": Int(s.lastTurn),
-             "on": status.isOn(s), "waking": waking.contains(s.id)]
+            var entry: [String: Any] = ["id": s.id, "title": String(s.title.prefix(120)), "pinned": s.pinned, "last": Int(s.lastTurn),
+                                        "on": status.isOn(s), "waking": waking.contains(s.id)]
+            if let remote = s.remoteId { entry["remote"] = remote }
+            return entry
         }
         relay.send([
             "t": "state",

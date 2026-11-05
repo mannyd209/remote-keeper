@@ -29,6 +29,9 @@ struct Session {
     let lastActivity: Double // ms since 1970; keeps moving while a turn is running
     let turns: Int
     let userEnabled: Bool? // Claude's per-session Remote Control switch (nil: never set)
+    /// Its claude.ai/code session id (the newest), so the phone can open this exact session in the
+    /// Claude app. nil until Remote Control has connected it at least once.
+    var remoteId: String? = nil
 }
 
 /// Every session file, read only when it changed since the last look. The files add up to tens of
@@ -95,7 +98,14 @@ private final class SessionCache {
             lastTurn: lastTurn,
             lastActivity: (d["lastActivityAt"] as? Double) ?? lastTurn,
             turns: d["completedTurns"] as? Int ?? 0,
-            userEnabled: d["remoteControlUserEnabled"] as? Bool)
+            userEnabled: d["remoteControlUserEnabled"] as? Bool,
+            remoteId: (d["bridgeSessionIds"] as? [String])?.last(where: { Self.isRemoteId($0) }))
+    }
+
+    /// claude.ai session ids are short and URL-safe (like "session_01AbC…"); anything else is ignored
+    /// rather than put in a link.
+    private static func isRemoteId(_ id: String) -> Bool {
+        !id.isEmpty && id.count <= 128 && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
     }
 }
 
