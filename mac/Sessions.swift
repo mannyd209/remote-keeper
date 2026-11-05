@@ -174,9 +174,10 @@ struct RemoteControlStatus {
 // MARK: - Waking a session
 
 /// Whether a session is in the middle of a turn, from Claude's log since Claude started: a turn
-/// begins with "Sending message to session X" (or "Mapping internal session X") and ends with
-/// "Query completed for session X". A start without an end only counts while the session file
-/// shows activity in the last 2 minutes, in case a stopped turn never logged its end.
+/// begins with "Sending message to session X" and ends with "Query completed for session X".
+/// ("Mapping internal session X" is not used: Claude also logs it when a session is just opened.)
+/// A start without an end only counts while the session file shows activity in the last 2
+/// minutes, in case a stopped turn never logged its end.
 func turnInProgress(_ id: String) -> Bool {
     guard let launch = claudeApp()?.launchDate,
           let handle = try? FileHandle(forReadingFrom: claudeLog) else { return false }
@@ -189,7 +190,7 @@ func turnInProgress(_ id: String) -> Bool {
         for line in String(decoding: handle.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n") where line.contains(id) {
             guard line.prefix(19) >= since else { continue }
             if line.contains("Query completed for session \(id)") { running = false }
-            else if line.contains("Sending message to session \(id)") || line.contains("Mapping internal session \(id)") { running = true }
+            else if line.contains("Sending message to session \(id)") { running = true }
         }
     }
     guard running, let s = session(id) else { return false }
@@ -214,8 +215,70 @@ func waitForTurnToFinish(_ id: String) -> Bool {
     return false
 }
 
+/// The session Claude's window shows right now, from its log ("setFocusedSession: sessionId=X"
+/// since Claude started). nil when none is shown or the log doesn't say.
+func shownSessionId() -> String? {
+    guard let launch = claudeApp()?.launchDate,
+          let handle = try? FileHandle(forReadingFrom: claudeLog) else { return nil }
+    defer { try? handle.close() }
+    let size = handle.seekToEndOfFile()
+    handle.seek(toFileOffset: size > 1_000_000 ? size - 1_000_000 : 0)
+    let since = logStamp(launch.addingTimeInterval(-1))
+    let marker = "setFocusedSession: sessionId="
+    var shown: String?
+    autoreleasepool {
+        for line in String(decoding: handle.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n") where line.contains(marker) {
+            guard line.prefix(19) >= since, let r = line.range(of: marker) else { continue }
+            let id = line[r.upperBound...].split(whereSeparator: { $0 == "," || $0 == " " }).first.map(String.init)
+            shown = (id == "null") ? nil : id
+        }
+    }
+    return shown
+}
+
+/// The text in Claude's focused message box. An empty box reads as "" or a lone newline.
+func messageBoxText(_ pid: pid_t) -> String? {
+    let app = AXUIElementCreateApplication(pid)
+    var focused: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+          let element = focused else { return nil }
+    var value: CFTypeRef?
+    AXUIElementCopyAttributeValue(element as! AXUIElement, kAXValueAttribute as CFString, &value)
+    return value as? String
+}
+
+/// Waits (up to `seconds`) until nobody has touched the Mac for `quiet` seconds.
+func waitUntilIdle(quiet: Double, seconds: Double) -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    while secondsSinceInput() < quiet {
+        guard Date() < deadline else { return false }
+        sleep(1)
+    }
+    return true
+}
+
+/// Checked right before anything is typed: Claude shows this session, its message box is empty,
+/// and nobody is using the Mac. Typing goes to whatever box has focus, so without these a wake
+/// could land in another session, or be mixed into what someone is typing.
+func readyToType(_ id: String, pid: pid_t) -> WakeError? {
+    guard waitUntilIdle(quiet: 5, seconds: 30) else {
+        log("Wake \(id): someone is using the Mac; nothing typed")
+        return .userActive
+    }
+    let shown = shownSessionId()
+    guard shown == id else {
+        log("Wake \(id): Claude is showing \(shown ?? "no session"), not this one; nothing typed")
+        return .wrongSession
+    }
+    if let text = messageBoxText(pid), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        log("Wake \(id): its message box has unsent text; nothing typed")
+        return .draft
+    }
+    return nil
+}
+
 enum WakeError: Error, CustomStringConvertible {
-    case noAccessibility, locked, noSession, claudeNotRunning, noMessageBox, noReply, busy
+    case noAccessibility, locked, noSession, claudeNotRunning, noMessageBox, noReply, busy, wrongSession, draft, userActive
 
     var description: String {
         switch self {
@@ -226,6 +289,9 @@ enum WakeError: Error, CustomStringConvertible {
         case .noMessageBox: return "Claude's message box didn't get focus, so nothing was typed."
         case .noReply: return "Remote Control didn't come back on. Check the session in the Claude app."
         case .busy: return "it's still working on a reply, so nothing was typed. Tap Reconnect again once it's done."
+        case .wrongSession: return "Claude didn't switch to that session, so nothing was typed. Tap Reconnect to try again."
+        case .draft: return "there's unsent text in that session's message box, so nothing was typed. Send or clear it, then tap Reconnect."
+        case .userActive: return "someone is using the Mac right now, so nothing was typed. Tap Reconnect again in a moment."
         }
     }
 }
@@ -350,14 +416,13 @@ func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
     guard AXIsProcessTrusted() else { return .failure(.noAccessibility) }
     guard !screenLocked() else { return .failure(.locked) }
 
-    // Give someone using the Mac a moment to pause, so the switch to Claude isn't a surprise.
-    let deadline = Date().addingTimeInterval(30)
-    while secondsSinceInput() < 8 && Date() < deadline { sleep(2) }
-
     // Never type into a session that's replying: wait for its turn to end. Finishing a turn
     // often reconnects it by itself.
     guard waitForTurnToFinish(id) else { return .failure(.busy) }
     if RemoteControlStatus.now().isOn(session(id) ?? target) { return .success("\(target.title): Remote Control is back on.") }
+
+    // Give someone using the Mac a moment to pause, so the switch to Claude isn't a surprise.
+    _ = waitUntilIdle(quiet: 8, seconds: 30)
 
     if claudeApp() == nil {
         bringClaudeForward()
@@ -366,9 +431,23 @@ func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
         sleep(12)   // let it load its sessions
     }
     guard let app = claudeApp() else { return .failure(.claudeNotRunning) }
+    // Right after Claude starts, its window isn't ready for a while.
+    if let launched = app.launchDate, Date().timeIntervalSince(launched) < 45 {
+        sleep(UInt32(45 - Date().timeIntervalSince(launched)))
+    }
 
-    bringClaudeForward(opening: URL(string: "claude://claude.ai/epitaxy/\(id)")!)
-    sleep(3)
+    // Open the session and make sure Claude actually switched to it.
+    let link = URL(string: "claude://claude.ai/epitaxy/\(id)")!
+    var switched = false
+    for attempt in 0..<2 where !switched {
+        bringClaudeForward(opening: link)
+        for _ in 0..<8 where !switched {
+            sleep(1)
+            switched = shownSessionId() == id
+        }
+        if !switched { log("Wake \(id): Claude didn't switch to it (attempt \(attempt + 1))") }
+    }
+    guard switched else { return .failure(.wrongSession) }
     var focused = false
     for attempt in 0..<6 {
         if attempt == 3 { bringClaudeForward() }
@@ -391,6 +470,7 @@ func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
     // 1. Claude's own /remote-control command: no Claude usage, and it also works when the
     //    session's switch was turned off. It only works while the session's process is running.
     let pid = app.processIdentifier
+    if let problem = readyToType(id, pid: pid) { return .failure(problem) }
     let started = Date()
     switch runRemoteControlCommand(id, pid: pid, since: started) {
     case .on:
@@ -398,6 +478,7 @@ func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
     case .switchedOff:
         // It was on after all and the command switched it off: switch it back on.
         log("/remote-control switched \(id) off; switching it back on")
+        if let problem = readyToType(id, pid: pid) { return .failure(problem) }
         return runRemoteControlCommand(id, pid: pid, since: Date()) == .on
             ? .success("\(target.title): Remote Control is on.") : .failure(.noReply)
     case .notRunning, .nothing:
@@ -408,6 +489,8 @@ func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
     //    it; a session whose switch is on reconnects by itself after that turn, and otherwise
     //    /remote-control works now.
     let before = session(id) ?? target
+    guard focusMessageBox(pid) else { return .failure(.noMessageBox) }
+    if let problem = readyToType(id, pid: pid) { return .failure(problem) }
     let sent = Date()
     type(wakeText, into: pid)
     log("Sent the wake message to \(id) to start it")
@@ -424,6 +507,7 @@ func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
         return .success("\(target.title): Remote Control is back on.")
     }
     guard focusMessageBox(pid) else { return .failure(.noMessageBox) }
+    if let problem = readyToType(id, pid: pid) { return .failure(problem) }
     switch runRemoteControlCommand(id, pid: pid, since: Date()) {
     case .on: return .success("\(target.title): Remote Control is back on.")
     default: return .failure(.noReply)
@@ -447,7 +531,9 @@ func runRemoteControlCommand(_ id: String, pid: pid_t, since start: Date) -> Com
             log("/remote-control: \(id) isn't running")
             return .notRunning
         }
-        if attempt == 3 { pressReturn(pid) }   // the first Return only picked it from the command menu
+        // The first Return may only have picked it from the command menu. Press again only if
+        // it's still this session and nobody is typing.
+        if attempt == 3, shownSessionId() == id, secondsSinceInput() >= 3 { pressReturn(pid) }
     }
     return .nothing
 }

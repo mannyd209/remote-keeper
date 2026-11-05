@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.9
+
+- Never types into the wrong place. Right before typing anything, Remote Keeper now checks that Claude is actually showing the session it's reconnecting, that the session's message box is empty, and that nobody is using the Mac. If any of those isn't true, nothing is typed and your phone says why. (Before, if Claude stayed on another session, the reconnect could be typed into that session, mixed into whatever you were writing.)
+- Fixes long waits after a Claude restart: opening a session counted as "in the middle of a reply," so Reconnect could wait 2 minutes per session for nothing. Only a sent message counts now.
+- Waits for Claude to finish starting up before reconnecting, so the first reconnect after a restart no longer fails with "message box didn't get focus."
+
 ## 0.3.8
 
 - Never types into a session that's replying: if you tap Reconnect while a session is in the middle of a turn, Remote Keeper waits up to 2 minutes for the turn to finish before running /remote-control (finishing a turn often reconnects it by itself). If it's still busy after that, nothing is typed and your phone says to try again once it's done. Thanks to u/akhi1uuu on Reddit for spotting this.

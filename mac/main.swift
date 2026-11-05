@@ -13,7 +13,7 @@
 import AppKit
 import Foundation
 
-let keeperVersion = "0.3.8"
+let keeperVersion = "0.3.9"
 
 let args = Array(CommandLine.arguments.dropFirst()).filter { !$0.hasPrefix("-NS") && !$0.hasPrefix("-Apple") }
 switch args.first ?? "" {
