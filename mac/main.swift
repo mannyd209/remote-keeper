@@ -45,6 +45,14 @@ case "wake":
     case .success(let done): print(args.contains("--dry-run") ? done.text : "✅ \(done.text)")
     case .failure(let error): print("⚠️ \(error.description)"); exit(1)
     }
+case "usage":
+    // Shows the newest reading; with --refresh, asks Claude for a fresh one first (always, even
+    // if the reading is new or someone is at the Mac).
+    if args.contains("--refresh") {
+        print(nudgeClaudeUsage(force: true) ? "Asked Claude for fresh usage" : "Couldn't reach Claude's menu-bar icon")
+        Thread.sleep(forTimeInterval: 4)
+    }
+    print(planUsage().map { "\($0)" } ?? "No usage reading")
 case "version":
     print(keeperVersion)
 default:

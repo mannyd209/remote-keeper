@@ -73,6 +73,14 @@ final class Keeper {
     private let queue = DispatchQueue(label: "keeper")
     private let wakeQueue = DispatchQueue(label: "wake")
     private var waking = Set<String>()   // only touched on `queue`
+    /// Set while Remote Keeper itself restarts Claude (from the phone), so the quit and restart
+    /// alerts stay quiet and the phone shows it's on its way back. Read from several queues.
+    private var restartingClaude: Bool {
+        get { restartLock.lock(); defer { restartLock.unlock() }; return restartFlag }
+        set { restartLock.lock(); restartFlag = newValue; restartLock.unlock() }
+    }
+    private var restartFlag = false
+    private let restartLock = NSLock()
     var onChange: (() -> Void)?          // called on the main queue when the menu should refresh
     var onNeedsSettings: (() -> Void)?   // called on the main queue to show the settings popup
     var onUpdateRequested: (() -> Void)? // called on the main queue: the phone asked to update this Mac
@@ -153,6 +161,10 @@ final class Keeper {
         switch message["t"] as? String {
         case "hello":
             sendState()
+            // The phone opened or refreshed: if Claude's usage reading is stale because nobody is
+            // at the Mac, ask Claude for a fresh one (in line with wakes, never during one).
+            // The menu's reset times arrive even when Claude saves no new reading, so send again.
+            wakeQueue.async { if nudgeClaudeUsage() { self.sendState() } }
         case "update":
             // From the phone's Update button: installs the latest GitHub release, and only if it's
             // signed by MannyD Labs and notarized (see Updater.swift).
@@ -184,6 +196,8 @@ final class Keeper {
                 store.update { $0.alertNew = on }
                 sendState()
             }
+        case "restartClaude":
+            restartClaude(force: message["force"] as? Bool == true)
         case "wake":
             let live = Set(liveSessions().map(\.id)), chosen = Set(store.watched)
             let ids = ((message["ids"] as? [String]) ?? []).filter { live.contains($0) && chosen.contains($0) && !waking.contains($0) }
@@ -206,10 +220,22 @@ final class Keeper {
             if let remote = s.remoteId { entry["remote"] = remote }
             return entry
         }
+        var claudeInfo: [String: Any] = ["running": launch != nil, "restarting": restartingClaude]
+        claudeInfo["since"] = launch.map { Int($0.timeIntervalSince1970 * 1000) as Any } ?? NSNull()
+        claudeInfo["version"] = claudeVersion() ?? NSNull()
+        claudeInfo["update"] = claudeUpdateReady() ?? NSNull()
+        claudeInfo["code"] = claudeCodeVersion() ?? NSNull()
+        // Claude installed an update when it last started: by itself (its own restart, which
+        // drops every session), or from the phone's Restart Claude.
+        if let installed = claudeInstalledUpdate(), let launch {
+            let byPhone = UserDefaults.standard.double(forKey: "keeperRestartedClaudeAt")
+            claudeInfo["updated"] = ["from": installed.from, "to": installed.to,
+                                     "byPhone": abs(launch.timeIntervalSince1970 - byPhone) < 300]
+        }
         relay.send([
             "t": "state",
             "mac": ["name": Host.current().localizedName ?? "Mac", "version": keeperVersion],
-            "claude": ["running": launch != nil, "since": launch.map { Int($0.timeIntervalSince1970 * 1000) as Any } ?? NSNull()],
+            "claude": claudeInfo,
             "locked": screenLocked(),
             "ax": AXIsProcessTrusted(),
             "claudeSetting": claudeConnectsNewSessions() == true,
@@ -275,6 +301,51 @@ final class Keeper {
                     self.sendState()
                 }
             }
+        }
+    }
+
+    /// From the phone's Restart Claude button: quits Claude (which installs a downloaded update),
+    /// opens it again, and reconnects your chosen sessions, like Reconnect All. Not while a
+    /// session is in the middle of a reply (that reply would stop), unless the phone insists.
+    func restartClaude(force: Bool) {
+        guard !restartingClaude else { return }
+        wakeQueue.async {
+            let computer = Host.current().localizedName ?? "your Mac"
+            if !force, let busy = liveSessions().first(where: { turnInProgress($0.id) }) {
+                self.relay.send(["t": "result", "ok": false,
+                                 "text": "Claude is still working in \u{201C}\(busy.title)\u{201D}. Try again when it's done."])
+                return
+            }
+            let update = claudeUpdateReady()
+            self.restartingClaude = true
+            self.sendState()
+            defer { self.restartingClaude = false; self.sendState() }
+            log("Restarting Claude from the phone\(update.map { " to install \($0)" } ?? "")")
+            if let app = claudeApp() {
+                DispatchQueue.main.sync { _ = app.terminate() }
+                // Claude installs a downloaded update while it quits, which can take a little while.
+                guard poll(seconds: 90, every: 0.5, { claudeApp() == nil }) else {
+                    self.relay.send(["t": "result", "ok": false,
+                                     "text": "Claude didn't quit on \(computer). It may be asking something on screen."])
+                    return
+                }
+                Thread.sleep(forTimeInterval: 3)
+            }
+            bringClaudeForward()
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "keeperRestartedClaudeAt")
+            guard poll(seconds: 120, every: 1, { claudeApp() != nil }) else {
+                self.relay.send(["t": "result", "ok": false, "text": "Claude didn't open again on \(computer)."])
+                return
+            }
+            let version = claudeVersion()
+            let installed = update != nil && update == version
+            let live = Set(liveSessions().map(\.id))
+            let ids = Array(self.store.watched.filter { live.contains($0) }.prefix(maxBatch))
+            self.relay.send(["t": "result", "ok": true,
+                             "text": (installed ? "Claude \(version ?? "") is installed." : "Claude is open again.")
+                                + (ids.isEmpty ? "" : " Reconnecting \(ids.count == 1 ? "your session" : "your \(ids.count) sessions")…")])
+            // Reconnects right after this restart finishes (the wake queue runs one job at a time).
+            self.queue.async { self.enqueueWake(ids.filter { !self.waking.contains($0) }) }
         }
     }
 
@@ -370,7 +441,7 @@ final class Keeper {
                 guard let launch else {
                     if quitSince == nil { self.queue.async { self.sendState() } }   // shows "Claude isn't open" right away
                     quitSince = quitSince ?? Date()
-                    if !quitAlerted, Date().timeIntervalSince(quitSince!) > 60, !self.store.watched.isEmpty {
+                    if !quitAlerted, !self.restartingClaude, Date().timeIntervalSince(quitSince!) > 60, !self.store.watched.isEmpty {
                         quitAlerted = true
                         self.queue.async { self.sendState() }
                         let n = self.store.watched.count
@@ -409,7 +480,7 @@ final class Keeper {
                     self.queue.async { self.sendState() }
                     return
                 }
-                if let due = restartAlertAt, Date() >= due {
+                if let due = restartAlertAt, Date() >= due, !self.restartingClaude {
                     restartAlertAt = nil
                     let offline = self.offlineWatched().filter { id in self.queue.sync { !self.waking.contains(id) } }
                     lastOffline = Set(self.offlineWatched())

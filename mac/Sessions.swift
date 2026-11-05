@@ -257,8 +257,16 @@ func planUsage() -> [String: Any]? {
             guard let t = s["t"] as? Double, let u = s["u"] as? [String: Any] else { return nil }
             return (t, u.compactMapValues { ($0 as? NSNumber)?.doubleValue })
         }
-        let resets = estimateResets(readings, now: Date().timeIntervalSince1970 * 1000, firstMessage: firstClaudeMessage(after:))
-        return ["at": Int(at), "limits": percents, "resets": resets.mapValues { Int($0) }]
+        let now = Date().timeIntervalSince1970 * 1000
+        var resets = estimateResets(readings, now: now, firstMessage: firstClaudeMessage(after:))
+        var shown = percents
+        var labels: [String: String] = [:]
+        if let menu = TrayUsage.latest, now - menu.at < 6 * 3_600_000 {
+            menu.correct(&resets, limits: &shown, labels: &labels, now: now, firstMessage: firstClaudeMessage(after:))
+        }
+        var result: [String: Any] = ["at": Int(at), "limits": shown, "resets": resets.mapValues { Int($0) }]
+        if !labels.isEmpty { result["labels"] = labels }
+        return result
     }
 }
 
@@ -494,6 +502,252 @@ enum WakeError: Error, CustomStringConvertible {
         default: return false
         }
     }
+}
+
+// MARK: - Claude's own updates
+
+/// The Claude app's version, from its bundle.
+func claudeVersion() -> String? {
+    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: claudeBundleID) else { return nil }
+    return Bundle(url: url)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+}
+
+/// The update Claude installed when it last started, from its log ("[updater] Version changed
+/// since last launch: 1.2.3 → 1.2.4"), or nil if this launch wasn't an update.
+func claudeInstalledUpdate() -> (from: String, to: String)? {
+    autoreleasepool {
+        guard let launch = claudeApp()?.launchDate,
+              let handle = try? FileHandle(forReadingFrom: claudeLog) else { return nil }
+        defer { try? handle.close() }
+        let size = handle.seekToEndOfFile()
+        handle.seek(toFileOffset: size > 6_000_000 ? size - 6_000_000 : 0)
+        let since = logStamp(launch.addingTimeInterval(-5))
+        var found: (String, String)?
+        for line in String(decoding: handle.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n")
+        where line.contains("[updater] Version changed since last launch: ") && line.prefix(19) >= since {
+            let parts = line.components(separatedBy: "since last launch: ").last?.components(separatedBy: " → ") ?? []
+            if parts.count == 2 {
+                let from = parts[0].trimmingCharacters(in: .whitespaces), to = parts[1].trimmingCharacters(in: .whitespaces)
+                if from.count < 40, to.count < 40 { found = (from, to) }
+            }
+        }
+        return found
+    }
+}
+
+/// The newest Claude Code engine the Claude app has downloaded (it keeps them in
+/// ~/Library/Application Support/Claude/claude-code/<version>), which new sessions use.
+func claudeCodeVersion() -> String? {
+    let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Claude/claude-code")
+    let versions = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+        .filter { $0.split(separator: ".").count == 3 && $0.allSatisfy { $0.isNumber || $0 == "." } }
+    return versions.max { a, b in
+        let x = a.split(separator: ".").map { Int($0) ?? 0 }, y = b.split(separator: ".").map { Int($0) ?? 0 }
+        return x.lexicographicallyPrecedes(y)
+    }
+}
+
+/// A Claude update that has downloaded and installs the next time Claude quits, from Claude's log
+/// since it started ("[updater] Update downloaded and ready to install { releaseName: 'Claude 1.2.3' }").
+/// nil when there's none, or it's the version already running.
+func claudeUpdateReady() -> String? {
+    autoreleasepool {
+        guard let launch = claudeApp()?.launchDate,
+              let handle = try? FileHandle(forReadingFrom: claudeLog) else { return nil }
+        defer { try? handle.close() }
+        let size = handle.seekToEndOfFile()
+        handle.seek(toFileOffset: size > 6_000_000 ? size - 6_000_000 : 0)
+        let since = logStamp(launch)
+        var ready: String?
+        for line in String(decoding: handle.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n")
+        where line.contains("[updater] Update downloaded and ready to install") && line.prefix(19) >= since {
+            if let r = line.range(of: "releaseName: '") {
+                let rest = line[r.upperBound...]
+                let name = rest.prefix { $0 != "'" }
+                let version = name.split(separator: " ").last.map(String.init) ?? String(name)
+                if !version.isEmpty, version.count < 40 { ready = version }
+            }
+        }
+        guard let ready, ready != claudeVersion() else { return nil }
+        return ready
+    }
+}
+
+// MARK: - Fresh usage readings
+
+/// How old Claude's newest usage reading is, in seconds (nil without one).
+func planUsageAge() -> Double? {
+    guard let data = try? Data(contentsOf: planUsageFile),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let t = (json["samples"] as? [[String: Any]])?.last?["t"] as? Double else { return nil }
+    return Date().timeIntervalSince1970 - t / 1000
+}
+
+private var lastUsageNudge = Date.distantPast
+
+/// Claude checks plan usage on its own only while someone is using the Mac (it skips its check
+/// after 10 idle minutes, and stops entirely a day after its menu-bar icon was last opened), so a
+/// phone away from the Mac sees an old reading. Right-clicking Claude's menu-bar icon makes Claude
+/// fetch usage right away (and restarts its own checks); this does exactly that, then closes the
+/// menu. Only when the reading is over 10 minutes old, nobody has touched the Mac for a minute,
+/// the screen isn't locked, and at most every 5 minutes. Escape is pressed only if Claude's menu
+/// really opened, so it can never reach a Claude window (where it would stop a reply). Returns
+/// whether it clicked; Claude saves the new reading a moment later, which the usage watcher sends.
+@discardableResult
+func nudgeClaudeUsage(force: Bool = false) -> Bool {
+    guard let claude = claudeApp(), !screenLocked() else { return false }
+    if !force {
+        let menuAge = TrayUsage.latest.map { Date().timeIntervalSince1970 - $0.at / 1000 } ?? .infinity
+        guard (planUsageAge() ?? .infinity) > 10 * 60 || menuAge > 60 * 60, secondsSinceInput() >= 60,
+              Date().timeIntervalSince(lastUsageNudge) > 5 * 60 else { return false }
+    }
+    let app = AXUIElementCreateApplication(claude.processIdentifier)
+    var bar: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(app, "AXExtrasMenuBar" as CFString, &bar) == .success, let bar,
+          let items = axChildren(bar as! AXUIElement), let item = items.first,
+          let origin = axPoint(item, kAXPositionAttribute), let size = axSize(item) else { return false }
+    lastUsageNudge = Date()
+    let target = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+    let cursor = CGEvent(source: nil)?.location
+    let pid = claude.processIdentifier
+    let menusBefore = popUpMenus(of: pid)
+    let source = CGEventSource(stateID: .hidSystemState)
+    CGEvent(mouseEventSource: source, mouseType: .rightMouseDown, mouseCursorPosition: target, mouseButton: .right)?.post(tap: .cghidEventTap)
+    usleep(50_000)
+    CGEvent(mouseEventSource: source, mouseType: .rightMouseUp, mouseCursorPosition: target, mouseButton: .right)?.post(tap: .cghidEventTap)
+    // Claude's menu is a pop-up menu window of its own; wait for it, then close it with Escape.
+    let opened = poll(seconds: 2, every: 0.1) { popUpMenus(of: pid) > menusBefore }
+    if opened {
+        usleep(400_000)
+        // The menu shows each limit with a rounded reset ("6% · Resets 4h"): read it for the
+        // exact reset times (see TrayUsage) before closing it.
+        if let reading = TrayUsage.read(pid: pid) { TrayUsage.latest = reading }
+        CGEvent(keyboardEventSource: source, virtualKey: 53, keyDown: true)?.post(tap: .cghidEventTap)
+        CGEvent(keyboardEventSource: source, virtualKey: 53, keyDown: false)?.post(tap: .cghidEventTap)
+        _ = poll(seconds: 1, every: 0.1) { popUpMenus(of: pid) <= menusBefore }
+    }
+    if let cursor { CGWarpMouseCursorPosition(cursor) }
+    log("Asked Claude for fresh usage (menu \(opened ? "opened and closed" : "didn't open"))")
+    return true
+}
+
+/// What Claude's menu-bar menu showed: each limit's name, percent used and rounded time to reset
+/// ("Resets 4h", "Resets 6d", "Resets 45m"). Claude keeps the exact reset times only in memory,
+/// so the rounded ones pin down which estimate is right (and add limits the usage file leaves
+/// out, like "Weekly · Fable").
+struct TrayUsage {
+    struct Row { let label: String; let percent: Double; let resetIn: Double?; let unit: Double }  // ms
+    let at: Double  // ms since 1970
+    let rows: [Row]
+
+    static var latest: TrayUsage?
+
+    /// The keys the usage file uses for the rows it has.
+    static let keys = ["5-hour limit": "fh", "Weekly · all models": "sd", "Weekly · Opus": "so", "Weekly · Sonnet": "sn"]
+
+    /// Reads the open menu through Accessibility: its window is found by position (the menu
+    /// isn't in Claude's usual accessibility tree).
+    static func read(pid: pid_t) -> TrayUsage? {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        guard let window = windows.first(where: { ($0[kCGWindowOwnerPID as String] as? Int) == Int(pid) && ($0[kCGWindowLayer as String] as? Int) == 101 }),
+              let b = window[kCGWindowBounds as String] as? [String: Double],
+              let x = b["X"], let y = b["Y"], let w = b["Width"], let h = b["Height"] else { return nil }
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(x + w / 2), Float(y + min(12, h / 2)), &hit) == .success,
+              var element = hit else { return nil }
+        for _ in 0..<6 where axString(element, kAXRoleAttribute) != "AXMenu" {
+            var parent: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &parent) == .success, let parent else { return nil }
+            element = parent as! AXUIElement
+        }
+        guard axString(element, kAXRoleAttribute) == "AXMenu" else { return nil }
+        var rows: [Row] = []
+        for item in axChildren(element) ?? [] {
+            let texts = (axChildren(item) ?? []).flatMap { axChildren($0) ?? [] }
+                .filter { axString($0, kAXRoleAttribute) == "AXStaticText" }
+                .compactMap { axString($0, kAXValueAttribute) ?? axString($0, kAXTitleAttribute) ?? axString($0, kAXDescriptionAttribute) }
+            guard texts.count >= 2, let row = parse(label: texts[0], detail: texts[1]) else { continue }
+            rows.append(row)
+        }
+        return rows.isEmpty ? nil : TrayUsage(at: Date().timeIntervalSince1970 * 1000, rows: rows)
+    }
+
+    /// "6% · Resets 4h" (also "Resets 1h 20m", "Resets 45m", "Resets 6d").
+    static func parse(label: String, detail: String) -> Row? {
+        let parts = detail.components(separatedBy: "·").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let percent = parts.first.flatMap({ Double($0.replacingOccurrences(of: "%", with: "")) }) else { return nil }
+        var total = 0.0, unit = 0.0
+        if let resets = parts.dropFirst().first(where: { $0.lowercased().hasPrefix("resets") }) {
+            let scanner = Scanner(string: resets.lowercased().replacingOccurrences(of: "resets", with: "").replacingOccurrences(of: "in", with: ""))
+            while !scanner.isAtEnd {
+                guard let n = scanner.scanDouble() else { _ = scanner.scanCharacter(); continue }
+                let letters = scanner.scanCharacters(from: .letters) ?? ""
+                let size: Double = letters.hasPrefix("d") ? 86_400_000 : letters.hasPrefix("h") ? 3_600_000 : letters.hasPrefix("m") ? 60_000 : 0
+                guard size > 0 else { continue }
+                total += n * size
+                unit = unit == 0 ? size : min(unit, size)
+            }
+        }
+        return Row(label: label, percent: percent, resetIn: unit > 0 ? total : nil, unit: unit)
+    }
+
+    /// Fixes the estimated resets so they agree with what the menu showed, and adds limits the
+    /// usage file doesn't have (with their names). The menu's time may be rounded either way, so
+    /// a reset fits if it lands from half a unit before to a whole unit after.
+    func correct(_ resets: inout [String: Double], limits: inout [String: Double], labels: inout [String: String],
+                 now: Double, firstMessage: (Double) -> Double?) {
+        let hour = 3_600_000.0, tenMinutes = 600_000.0
+        for (i, row) in rows.enumerated() {
+            let key = Self.keys[row.label] ?? "m\(i)"
+            if Self.keys[row.label] == nil { labels[key] = row.label; limits[key] = row.percent }
+            guard let resetIn = row.resetIn else { continue }
+            let low = at + resetIn - row.unit / 2, high = at + resetIn + row.unit
+            guard high > now else { continue }   // that reset has passed since the menu was read
+            if let estimate = resets[key], estimate >= low, estimate <= high { continue }
+            var fixed: Double?
+            if key == "fh" {
+                // The 5-hour window began with the first message sent 5 hours before the reset.
+                if let sent = firstMessage(low - 5 * hour), sent <= high - 5 * hour { fixed = sent + 5 * hour }
+            } else if let weekly = resets["sd"], weekly >= low, weekly <= high {
+                fixed = weekly   // other weekly limits reset with the all-models one
+            }
+            resets[key] = ((fixed ?? (low + high) / 2) / tenMinutes).rounded() * tenMinutes
+        }
+    }
+}
+
+private func axString(_ element: AXUIElement, _ attribute: String) -> String? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+    return (value as? String).flatMap { $0.isEmpty ? nil : $0 }
+}
+
+/// On-screen pop-up menu windows (level 101) that belong to `pid`.
+private func popUpMenus(of pid: pid_t) -> Int {
+    let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+    return windows.filter { ($0[kCGWindowOwnerPID as String] as? Int) == Int(pid) && ($0[kCGWindowLayer as String] as? Int) == 101 }.count
+}
+
+private func axChildren(_ element: AXUIElement) -> [AXUIElement]? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success else { return nil }
+    return value as? [AXUIElement]
+}
+
+private func axPoint(_ element: AXUIElement, _ attribute: String) -> CGPoint? {
+    var value: CFTypeRef?
+    var point = CGPoint.zero
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success, let value,
+          AXValueGetValue(value as! AXValue, .cgPoint, &point) else { return nil }
+    return point
+}
+
+private func axSize(_ element: AXUIElement) -> CGSize? {
+    var value: CFTypeRef?
+    var size = CGSize.zero
+    guard AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &value) == .success, let value,
+          AXValueGetValue(value as! AXValue, .cgSize, &size) else { return nil }
+    return size
 }
 
 func screenLocked() -> Bool {

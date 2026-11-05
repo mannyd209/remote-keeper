@@ -2,6 +2,9 @@
 
 ## 0.3.12
 
+- Fresh usage even when you're away from the Mac: Claude only checks your plan usage on its own while someone is using the Mac (and stops a day after its menu-bar icon was last opened), so your phone could show a reading from hours ago. Now, when you open or refresh the iPhone app and the reading is over 10 minutes old, Remote Keeper right-clicks Claude's menu-bar icon, which makes Claude check right away, and closes the menu again. Only when nobody has used the Mac for a minute and the screen isn't locked, at most every 5 minutes, and the pointer goes back where it was.
+- Exact reset times: while that menu is open, Remote Keeper reads the reset times Claude shows there ("Resets 4h") and uses them to correct its own estimates. Limits only the menu shows, like Weekly · Fable, now reach your phone too.
+- Claude updates from your phone: when Claude has downloaded an update, your phone says so, and Restart Claude (also in the computer's ••• menu) quits Claude, which installs it, opens it again and reconnects all your chosen sessions, like Reconnect All. It won't restart while a session is in the middle of a reply. Your phone also gets Claude's version and its Claude Code version, for the What's New list.
 - Jump straight into a session: your phone now gets each session's claude.ai session id (the one Claude saves once Remote Control has connected it), so the iPhone app can open that exact session in the Claude app with one tap. Read-only, from Claude's own session files.
 
 ## 0.3.11
