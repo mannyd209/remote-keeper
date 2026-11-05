@@ -625,7 +625,12 @@ func nudgeClaudeUsage(force: Bool = false) -> Bool {
         usleep(400_000)
         // The menu shows each limit with a rounded reset ("6% · Resets 4h"): read it for the
         // exact reset times (see TrayUsage) before closing it.
-        if let reading = TrayUsage.read(pid: pid) { TrayUsage.latest = reading }
+        if let reading = TrayUsage.read(pid: pid) {
+            TrayUsage.latest = reading
+            log("Claude's menu: " + reading.rows.map { "\($0.label) \(Int($0.percent))%" + ($0.resetIn.map { " resets in \(Int($0 / 60_000))m" } ?? "") }.joined(separator: ", "))
+        } else {
+            log("Couldn't read the usage in Claude's menu")
+        }
         CGEvent(keyboardEventSource: source, virtualKey: 53, keyDown: true)?.post(tap: .cghidEventTap)
         CGEvent(keyboardEventSource: source, virtualKey: 53, keyDown: false)?.post(tap: .cghidEventTap)
         _ = poll(seconds: 1, every: 0.1) { popUpMenus(of: pid) <= menusBefore }
@@ -639,12 +644,24 @@ func nudgeClaudeUsage(force: Bool = false) -> Bool {
 /// ("Resets 4h", "Resets 6d", "Resets 45m"). Claude keeps the exact reset times only in memory,
 /// so the rounded ones pin down which estimate is right (and add limits the usage file leaves
 /// out, like "Weekly · Fable").
-struct TrayUsage {
-    struct Row { let label: String; let percent: Double; let resetIn: Double?; let unit: Double }  // ms
+struct TrayUsage: Codable {
+    struct Row: Codable { let label: String; let percent: Double; let resetIn: Double?; let unit: Double }  // ms
     let at: Double  // ms since 1970
     let rows: [Row]
 
-    static var latest: TrayUsage?
+    /// The newest reading. Saved to disk so a restart of Remote Keeper (an update, say) doesn't
+    /// lose the reset times until the next time the menu can be read.
+    static var latest: TrayUsage? = load() {
+        didSet {
+            guard let latest, let data = try? JSONEncoder().encode(latest) else { return }
+            try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
+            try? data.write(to: file, options: .atomic)
+        }
+    }
+    private static let file = supportDir.appendingPathComponent("claude-menu-usage.json")
+    private static func load() -> TrayUsage? {
+        (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(TrayUsage.self, from: $0) }
+    }
 
     /// The keys the usage file uses for the rows it has.
     static let keys = ["5-hour limit": "fh", "Weekly · all models": "sd", "Weekly · Opus": "so", "Weekly · Sonnet": "sn"]
