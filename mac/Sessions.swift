@@ -798,22 +798,84 @@ func bringClaudeForward(opening url: URL? = nil) {
     claudeApp()?.activate()
 }
 
+/// Claude's windows, the focused and main ones first.
+func claudeWindows(_ pid: pid_t) -> [AXUIElement] {
+    let app = AXUIElementCreateApplication(pid)
+    AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    var list: [AXUIElement] = []
+    for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
+        var value: CFTypeRef?
+        if AXUIElementCopyAttributeValue(app, attribute as CFString, &value) == .success, let value {
+            let window = value as! AXUIElement
+            if !list.contains(where: { CFEqual($0, window) }) { list.append(window) }
+        }
+    }
+    var all: CFTypeRef?
+    if AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &all) == .success, let windows = all as? [AXUIElement] {
+        for window in windows where !list.contains(where: { CFEqual($0, window) }) { list.append(window) }
+    }
+    return list
+}
+
+/// Claude 4.23 and later show each session's own Remote Control switch next to its message box.
+/// Returns it, from the front window first (that's where the session was just opened).
+func remoteControlSwitch(_ pid: pid_t) -> AXUIElement? {
+    var found: AXUIElement?
+    func walk(_ element: AXUIElement, depth: Int) {
+        guard depth < 60, found == nil else { return }
+        var subrole: CFTypeRef?, title: CFTypeRef?
+        AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subrole)
+        if subrole as? String == "AXSwitch" {
+            AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title)
+            if title as? String == "Remote Control" { found = element; return }
+        }
+        var kids: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &kids) == .success,
+              let children = kids as? [AXUIElement] else { return }
+        for child in children { walk(child, depth: depth + 1) }
+    }
+    for window in claudeWindows(pid) where found == nil { walk(window, depth: 0) }
+    return found
+}
+
+/// Turns Remote Control on with the session's own switch (Claude 4.23 and later): nothing is
+/// typed and no wake message is needed, even for a session Claude hasn't started. nil when the
+/// switch isn't there (older Claude) or didn't do it, so the caller falls back to typing.
+func pressRemoteControlSwitch(_ id: String, pid: pid_t, wait seconds: Double) -> Bool? {
+    var toggle: AXUIElement?
+    guard poll(seconds: seconds, every: 0.25, { toggle = remoteControlSwitch(pid); return toggle != nil }), let toggle else {
+        log("Wake \(id): no Remote Control switch in Claude's window; typing instead")
+        return nil
+    }
+    var value: CFTypeRef?
+    AXUIElementCopyAttributeValue(toggle, kAXValueAttribute as CFString, &value)
+    // On already but Claude doesn't say so yet: pressing it would switch it off.
+    guard (value as? NSNumber)?.intValue == 0 else { return nil }
+    guard shownSessionId() == id else { return nil }
+    let result = AXUIElementPerformAction(toggle, kAXPressAction as CFString)
+    guard result == .success else {
+        log("Wake \(id): pressing the Remote Control switch failed (\(result.rawValue)); typing instead")
+        return nil
+    }
+    log("Wake \(id): pressed its Remote Control switch")
+    let on = poll(seconds: 15) { session(id).map { RemoteControlStatus.now().isOn($0) } ?? false }
+    if !on { log("Wake \(id): the switch didn't bring Remote Control back; typing instead") }
+    return on ? true : nil
+}
+
+
 /// Finds the session's message box in Claude's front window and gives it focus.
 func focusMessageBox(_ pid: pid_t) -> Bool {
     if messageBoxFocused(pid) { return true }
-    let app = AXUIElementCreateApplication(pid)
-    AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-    var window: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success
-            || AXUIElementCopyAttributeValue(app, kAXMainWindowAttribute as CFString, &window) == .success,
-          let root = window else {
-        log("Focus: Claude has no front window")
+    let windows = claudeWindows(pid)
+    guard !windows.isEmpty else {
+        log("Focus: Claude has no window")
         return false
     }
     // The message box is an editable text area; there's normally one, at the bottom.
     var boxes: [(AXUIElement, CGFloat)] = []
     func walk(_ element: AXUIElement, depth: Int) {
-        guard depth < 40, boxes.count < 20 else { return }
+        guard depth < 60, boxes.count < 20 else { return }
         var role: CFTypeRef?
         AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
         if role as? String == "AXTextArea" {
@@ -829,9 +891,11 @@ func focusMessageBox(_ pid: pid_t) -> Bool {
               let children = kids as? [AXUIElement] else { return }
         for child in children { walk(child, depth: depth + 1) }
     }
-    walk(root as! AXUIElement, depth: 0)
+    // The front window first; another one only if it has no message box (right after an update
+    // the window Claude reports as focused isn't always the one showing the session).
+    for root in windows where boxes.isEmpty { walk(root, depth: 0) }
     guard let box = boxes.max(by: { $0.1 < $1.1 })?.0 else {
-        log("Focus: no message box found in Claude's window")
+        log("Focus: no message box found in Claude's \(windows.count == 1 ? "window" : "\(windows.count) windows")")
         return false
     }
     AXUIElementSetAttributeValue(box, kAXFocusedAttribute as CFString, kCFBooleanTrue)
@@ -940,8 +1004,13 @@ func wake(_ id: String, dryRun: Bool = false, verifyLater: Bool = false) -> Resu
         if !switched { log("Wake \(id): Claude didn't switch to it (attempt \(attempt + 1))") }
     }
     guard switched else { return .failure(.wrongSession) }
-    // A session Claude only just loaded can take a while to show its message box.
     let pid = app.processIdentifier
+    // 0. Claude 4.23 and later: the session's own Remote Control switch. Nothing typed.
+    if pressRemoteControlSwitch(id, pid: pid, wait: sinceLaunch < 180 ? 15 : 6) == true {
+        return .success("\(target.title): Remote Control is back on.")
+    }
+    if RemoteControlStatus.now().isOn(session(id) ?? target) { return .success("\(target.title): Remote Control is back on.") }
+    // A session Claude only just loaded can take a while to show its message box.
     var tries = 0
     let focused = poll(seconds: sinceLaunch < 180 ? 15 : 5, every: 0.25) {
         tries += 1

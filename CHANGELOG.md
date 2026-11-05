@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.13
+
+- Reconnects with Claude's own Remote Control switch: Claude 4.23 and later show a Remote Control switch next to each session's message box. Remote Keeper now opens the session and presses that switch, so nothing is typed and no wake message is sent, even for sessions Claude hasn't started since it opened. A few seconds per session. Older Claude versions (or if the switch isn't there) still get /remote-control typed, as before.
+- Fixes reconnecting right after a Claude update: Remote Keeper only looked for the message box in the window Claude reported as focused, which right after an update isn't always the one showing the session, so every session failed with "no message box". It now looks in all of Claude's windows.
+
 ## 0.3.12
 
 - Fresh usage even when you're away from the Mac: Claude only checks your plan usage on its own while someone is using the Mac (and stops a day after its menu-bar icon was last opened), so your phone could show a reading from hours ago. Now, when you open or refresh the iPhone app and the reading is over 10 minutes old, Remote Keeper right-clicks Claude's menu-bar icon, which makes Claude check right away, and closes the menu again. Only when nobody has used the Mac for a minute and the screen isn't locked, at most every 5 minutes, and the pointer goes back where it was.
