@@ -60,7 +60,7 @@ When you tap **Reconnect** on your phone, Remote Keeper opens that session in th
 
 ## iPhone app
 
-The native iPhone app is [free on the App Store](https://apps.apple.com/us/app/remote-keeper-for-claude-code/id6829386828): no session limit, a **Reconnect** button right in the notification, Home Screen and Lock Screen widgets, Siri and Shortcuts, Face ID lock, new sessions that show up on their own, and your computers synced with iCloud. It works with the same Mac app.
+The native iPhone app is [free on the App Store](https://apps.apple.com/us/app/remote-keeper-for-claude-code/id6829386828): no session limit, a **Reconnect** button right in the notification, one tap to jump into any session in the Claude app, your Claude usage with reset times, Claude updates you install on your terms, Home Screen and Lock Screen widgets, Siri and Shortcuts, Face ID lock, new sessions that show up on their own, and your computers synced with iCloud. It works with the same Mac app.
 
 <p align="center">
   <img src="docs/screenshots/iphone/01-reconnect.jpg" alt="iPhone app: offline sessions with one Reconnect button" width="200">
@@ -95,8 +95,10 @@ To add another Mac, install Remote Keeper on it, then tap **＋** in the app on 
 ## Privacy and security
 
 - **It only ever types Claude's /remote-control command** (or, as a fallback, one fixed message). Nothing you type on your phone is sent to your computer, so Remote Keeper can't be used to run commands on it.
-- **It only reconnects when you tap.** It never reconnects anything on its own.
-- **It only reads** the Claude app's session list (titles, pinned, last activity) and its log, and never changes them.
+- **It only reconnects when you tap.** It never reconnects anything on its own, except right after a Claude restart you asked for from your phone (below).
+- **It only reads** the Claude app's session list (titles, pinned, last activity, and each session's claude.ai id so your phone can open it in the Claude app), its log, its usage file and its version, and never changes them.
+- **Fresh usage (0.3.12+):** Claude only checks your plan usage on its own while someone is using the Mac. So when your phone opens and the reading is over 10 minutes old, Remote Keeper right-clicks Claude's menu-bar icon (which makes Claude check right away), reads the limits and reset times shown in that menu, and closes it with Escape. It does this only when nobody has touched the Mac for a minute and the screen isn't locked, at most every 5 minutes, presses Escape only if the menu really opened, and puts the pointer back where it was.
+- **Restart Claude (0.3.12+):** only when you tap **Install Now** or **Restart Claude** on your phone. Remote Keeper quits Claude (which installs a downloaded Claude update), opens it again and reconnects your chosen sessions. It refuses while a session is in the middle of a reply.
 - **End-to-end encrypted.** Your phone and your Mac talk through a small relay, but the QR code holds a secret in the part of the link that browsers never send to a server. Both ends derive their keys from it (HKDF-SHA256, AES-256-GCM), so the relay only passes along ciphertext: it can't read your session names or fake a tap. You can check this in [`web/crypto.js`](web/crypto.js) and [`mac/Relay.swift`](mac/Relay.swift).
 - **No account and no tracking.** The relay keeps no session data, only push subscriptions for alerts and, while your Mac is connected, one sealed offline alert from it (encrypted like everything else).
 
@@ -105,6 +107,8 @@ Reconnecting with /remote-control uses no Claude usage. Only the fallback messag
 ## FAQ
 
 **Is there an iPhone app?** Yes, it's [free on the App Store](https://apps.apple.com/us/app/remote-keeper-for-claude-code/id6829386828) ([screenshots](#iphone-app)). The web app stays, for Android and for anyone who'd rather not install anything.
+
+**Can it install Claude's own updates?** Claude installs a downloaded update when it restarts, which turns Remote Control off for every session, and it does that by itself a few hours later if you don't. Remote Keeper 0.3.12 tells your phone when an update is ready, and **Install Now** in the iPhone app restarts Claude on your terms and reconnects everything. If Claude updated itself, the app says so.
 
 **What if my Mac goes offline?** If Remote Keeper on your Mac stops checking in for 5 minutes (not because the Mac went to sleep or you quit it), your phone gets an alert. And if macOS ever closes Remote Keeper, it restarts itself within seconds.
 
