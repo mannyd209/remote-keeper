@@ -838,29 +838,32 @@ func remoteControlSwitch(_ pid: pid_t) -> AXUIElement? {
     return found
 }
 
-/// Turns Remote Control on with the session's own switch (Claude 4.23 and later): nothing is
-/// typed and no wake message is needed, even for a session Claude hasn't started. nil when the
-/// switch isn't there (older Claude) or didn't do it, so the caller falls back to typing.
+/// Turns Remote Control on with the session's own switch (Claude 4.23 and later), so nothing is
+/// typed. Only for sessions Claude is running: one it hasn't started refuses ("no active query"),
+/// and the wake message is the fast way for those. nil when the switch isn't there (older
+/// Claude) or Claude didn't take it, so the caller types instead, right away.
 func pressRemoteControlSwitch(_ id: String, pid: pid_t, wait seconds: Double) -> Bool? {
     var toggle: AXUIElement?
-    guard poll(seconds: seconds, every: 0.25, { toggle = remoteControlSwitch(pid); return toggle != nil }), let toggle else {
+    guard poll(seconds: seconds, every: 0.2, { toggle = remoteControlSwitch(pid); return toggle != nil }), let toggle else {
         log("Wake \(id): no Remote Control switch in Claude's window; typing instead")
         return nil
     }
     var value: CFTypeRef?
     AXUIElementCopyAttributeValue(toggle, kAXValueAttribute as CFString, &value)
     // On already but Claude doesn't say so yet: pressing it would switch it off.
-    guard (value as? NSNumber)?.intValue == 0 else { return nil }
-    guard shownSessionId() == id else { return nil }
-    let result = AXUIElementPerformAction(toggle, kAXPressAction as CFString)
-    guard result == .success else {
-        log("Wake \(id): pressing the Remote Control switch failed (\(result.rawValue)); typing instead")
-        return nil
-    }
-    log("Wake \(id): pressed its Remote Control switch")
-    let on = poll(seconds: 15) { session(id).map { RemoteControlStatus.now().isOn($0) } ?? false }
-    if !on { log("Wake \(id): the switch didn't bring Remote Control back; typing instead") }
-    return on ? true : nil
+    guard (value as? NSNumber)?.intValue == 0, shownSessionId() == id else { return nil }
+    let since = Date()
+    guard AXUIElementPerformAction(toggle, kAXPressAction as CFString) == .success else { return nil }
+    // Claude logs right away whether it took it ("Enabling remote control for session …") or not
+    // ("Cannot toggle remote control for … : no active query").
+    var refused = false
+    let enabling = poll(seconds: 5, every: 0.1) {
+        let lines = claudeLogLines(since: since, about: id)
+        refused = lines.contains { $0.contains("Cannot toggle remote control for \(id)") }
+        return refused || lines.contains { $0.contains("Enabling remote control for session \(id)") }
+    } && !refused
+    log("Wake \(id): pressed its Remote Control switch (\(enabling ? "Claude is turning it on" : refused ? "Claude refused: not running yet" : "no answer"))")
+    return enabling ? true : nil
 }
 
 
@@ -1005,11 +1008,12 @@ func wake(_ id: String, dryRun: Bool = false, verifyLater: Bool = false) -> Resu
     }
     guard switched else { return .failure(.wrongSession) }
     let pid = app.processIdentifier
-    // 0. Claude 4.23 and later: the session's own Remote Control switch. Nothing typed.
-    if pressRemoteControlSwitch(id, pid: pid, wait: sinceLaunch < 180 ? 15 : 6) == true {
+    // 0. A session Claude is running, on Claude 4.23 and later: its own Remote Control switch.
+    //    Nothing typed. (Sessions Claude hasn't started can't take it; the wake message below is
+    //    the fast way for those.)
+    if sessionStarted(id), pressRemoteControlSwitch(id, pid: pid, wait: 2) == true {
         return .success("\(target.title): Remote Control is back on.")
     }
-    if RemoteControlStatus.now().isOn(session(id) ?? target) { return .success("\(target.title): Remote Control is back on.") }
     // A session Claude only just loaded can take a while to show its message box.
     var tries = 0
     let focused = poll(seconds: sinceLaunch < 180 ? 15 : 5, every: 0.25) {

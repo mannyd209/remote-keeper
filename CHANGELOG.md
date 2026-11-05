@@ -2,7 +2,7 @@
 
 ## 0.3.13
 
-- Reconnects with Claude's own Remote Control switch: Claude 4.23 and later show a Remote Control switch next to each session's message box. Remote Keeper now opens the session and presses that switch, so nothing is typed and no wake message is sent, even for sessions Claude hasn't started since it opened. A few seconds per session. Older Claude versions (or if the switch isn't there) still get /remote-control typed, as before.
+- Reconnects with Claude's own Remote Control switch: Claude 4.23 and later show a Remote Control switch next to each session's message box. For a session Claude is running, Remote Keeper now presses that switch instead of typing /remote-control (under a second). Sessions Claude hasn't started since it opened can't take the switch, so they still get the one short wake message (about a second and a half). Older Claude versions get /remote-control typed, as before.
 - Fixes reconnecting right after a Claude update: Remote Keeper only looked for the message box in the window Claude reported as focused, which right after an update isn't always the one showing the session, so every session failed with "no message box". It now looks in all of Claude's windows.
 
 ## 0.3.12
