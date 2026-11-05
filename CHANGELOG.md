@@ -6,6 +6,7 @@
 - Exact reset times: while that menu is open, Remote Keeper reads the reset times Claude shows there ("Resets 4h") and uses them to correct its own estimates. Limits only the menu shows, like Weekly · Fable, now reach your phone too.
 - Claude updates from your phone: when Claude has downloaded an update, your phone says so, and Restart Claude (also in the computer's ••• menu) quits Claude, which installs it, opens it again and reconnects all your chosen sessions, like Reconnect All. It won't restart while a session is in the middle of a reply. Your phone also gets Claude's version and its Claude Code version, for the What's New list.
 - An alert on your phone when Claude has an update ready (once per version), with Install Now right in the notification.
+- Scheduled-task runs (sessions Claude starts by itself for a scheduled task) no longer show up as new sessions, set off new-session alerts, or appear in Choose Sessions. Remote Control doesn't reach them anyway.
 - Jump straight into a session: your phone now gets each session's claude.ai session id (the one Claude saves once Remote Control has connected it), so the iPhone app can open that exact session in the Claude app with one tap. Read-only, from Claude's own session files.
 
 ## 0.3.11

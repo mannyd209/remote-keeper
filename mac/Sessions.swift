@@ -32,6 +32,8 @@ struct Session {
     /// Its claude.ai/code session id (the newest), so the phone can open this exact session in the
     /// Claude app. nil until Remote Control has connected it at least once.
     var remoteId: String? = nil
+    /// A run of a scheduled task (Claude starts these by itself; Remote Control doesn't reach them).
+    var scheduled: Bool = false
 }
 
 /// Every session file, read only when it changed since the last look. The files add up to tens of
@@ -99,7 +101,8 @@ private final class SessionCache {
             lastActivity: (d["lastActivityAt"] as? Double) ?? lastTurn,
             turns: d["completedTurns"] as? Int ?? 0,
             userEnabled: d["remoteControlUserEnabled"] as? Bool,
-            remoteId: (d["bridgeSessionIds"] as? [String])?.last(where: { Self.isRemoteId($0) }))
+            remoteId: (d["bridgeSessionIds"] as? [String])?.last(where: { Self.isRemoteId($0) }),
+            scheduled: (d["scheduledTaskId"] as? String).map { !$0.isEmpty } ?? false)
     }
 
     /// claude.ai session ids are short and URL-safe (like "session_01AbC…"); anything else is ignored
@@ -109,10 +112,11 @@ private final class SessionCache {
     }
 }
 
-/// Sessions you can wake: not archived, and their folder still exists.
+/// Sessions you can wake: not archived, not a scheduled task's run (Claude starts those by itself
+/// and Remote Control doesn't reach them), and their folder still exists.
 func liveSessions() -> [Session] {
     allSessions()
-        .filter { !$0.archived && FileManager.default.fileExists(atPath: $0.cwd) }
+        .filter { !$0.archived && !$0.scheduled && FileManager.default.fileExists(atPath: $0.cwd) }
         .sorted { $0.lastTurn > $1.lastTurn }
 }
 
