@@ -216,6 +216,7 @@ final class Keeper {
             "sessions": sessions,
             "new": newSessions().map { s in ["id": s.id, "title": String(s.title.prefix(120)), "pinned": s.pinned, "last": Int(s.lastTurn)] },
             "alertNew": store.current.alertNew == true,
+            "usage": planUsage() ?? NSNull(),
         ])
     }
 
@@ -258,32 +259,21 @@ final class Keeper {
         guard !ids.isEmpty else { sendState(); return }
         ids.forEach { waking.insert($0) }
         sendState()
-        for id in ids { wakeQueue.async { self.runWake(id, isRetry: false) } }
-    }
-
-    /// One reconnect, on the wake queue. If Claude simply wasn't ready (no message box yet, or it
-    /// didn't switch to the session), it goes to the back of the line once before the phone hears
-    /// it failed: right after a restart the first few can come too early.
-    private func runWake(_ id: String, isRetry: Bool) {
-        let result = wake(id)
-        if !isRetry, case .failure(let error) = result, error.worthRetrying {
-            log("Wake \(id): will try again after the others")
-            wakeQueue.async { self.runWake(id, isRetry: true) }
-            sleep(2)
-            return
-        }
-        queue.async {
-            self.waking.remove(id)
-            let name = session(id)?.title ?? "That session"
-            switch result {
-            case .success(let text): self.relay.send(["t": "result", "id": id, "ok": true, "text": text])
-            case .failure(let error):
-                self.relay.send(["t": "result", "id": id, "ok": false, "text": "\(name): \(error.description)"])
-                if case .noAccessibility = error { DispatchQueue.main.async { self.onNeedsSettings?() } }
+        wakeQueue.async {
+            wakeMany(ids) { id, result in
+                self.queue.async {
+                    self.waking.remove(id)
+                    let name = session(id)?.title ?? "That session"
+                    switch result {
+                    case .success(let done): self.relay.send(["t": "result", "id": id, "ok": true, "text": done.text])
+                    case .failure(let error):
+                        self.relay.send(["t": "result", "id": id, "ok": false, "text": "\(name): \(error.description)"])
+                        if case .noAccessibility = error { DispatchQueue.main.async { self.onNeedsSettings?() } }
+                    }
+                    self.sendState()
+                }
             }
-            self.sendState()
         }
-        sleep(2)
     }
 
     func offlineWatched() -> [String] {
@@ -301,7 +291,60 @@ final class Keeper {
     /// Watches your chosen sessions and tells your phone when Remote Control goes off for any of
     /// them: Claude restarted or quit, or a session's switch was turned off. It only offers to
     /// reconnect; nothing is reconnected until you tap.
+    /// Wakes the watcher early: Claude opened or quit, or its log changed.
+    private let watcherNudge = DispatchSemaphore(value: 0)
+    private var lastNudge = Date.distantPast
+    private var fileWatches: [String: DispatchSourceFileSystemObject] = [:]
+
+    private func nudgeWatcher() {
+        // At most about once a second: Claude writes its log often.
+        guard Date().timeIntervalSince(lastNudge) > 1 else { return }
+        lastNudge = Date()
+        watcherNudge.signal()
+    }
+
+    /// Instant updates: macOS says right away when Claude opens or quits, and Claude writes to its
+    /// log whenever a session's Remote Control changes, so the phone doesn't wait for the next check.
+    private func watchClaudeEvents() {
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            center.addObserver(forName: name, object: nil, queue: nil) { [weak self] note in
+                let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                guard app?.bundleIdentifier == claudeBundleID else { return }
+                self?.queue.async { self?.lastNudge = .distantPast; self?.nudgeWatcher() }
+            }
+        }
+        watchFile(claudeLog, key: "log") { [weak self] in self?.nudgeWatcher() }
+        // A new usage reading: send it to the phone (Claude saves one about every 5 minutes).
+        watchFile(planUsageFile, key: "usage") { [weak self] in
+            guard let self, self.phoneLinked else { return }
+            self.sendState()
+        }
+    }
+
+    /// Watches a file for changes; re-attaches when it's replaced (Claude starts a new log, and
+    /// saves its usage file by replacing it).
+    private func watchFile(_ url: URL, key: String, onChange: @escaping () -> Void) {
+        fileWatches[key]?.cancel()
+        let fd = open(url.path, O_EVTONLY)
+        guard fd >= 0 else {
+            queue.asyncAfter(deadline: .now() + 30) { [weak self] in self?.watchFile(url, key: key, onChange: onChange) }
+            return
+        }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .extend, .delete, .rename], queue: queue)
+        source.setEventHandler { [weak self] in
+            if source.data.contains(.delete) || source.data.contains(.rename) {
+                self?.queue.asyncAfter(deadline: .now() + 1) { self?.watchFile(url, key: key, onChange: onChange) }
+            }
+            onChange()
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        fileWatches[key] = source
+    }
+
     private func watchForRestarts() {
+        queue.async { self.watchClaudeEvents() }
         Thread.detachNewThread {
             var lastLaunch = claudeApp()?.launchDate
             var lastOffline = autoreleasepool { Set(self.offlineWatched()) }
@@ -312,6 +355,7 @@ final class Keeper {
             }
             var quitSince: Date?
             var quitAlerted = false
+            var restartAlertAt: Date?
             // Each pass runs in its own autorelease pool: a detached thread has none, so without it
             // every object Foundation autoreleased here (log text, dates, session files) piled up
             // forever, about 280 MB a minute, until macOS killed Remote Keeper for low memory.
@@ -322,6 +366,7 @@ final class Keeper {
 
                 // Claude quit: say so once if it stays closed for a minute.
                 guard let launch else {
+                    if quitSince == nil { self.queue.async { self.sendState() } }   // shows "Claude isn't open" right away
                     quitSince = quitSince ?? Date()
                     if !quitAlerted, Date().timeIntervalSince(quitSince!) > 60, !self.store.watched.isEmpty {
                         quitAlerted = true
@@ -352,18 +397,26 @@ final class Keeper {
                     }
                 }
 
-                // Claude restarted: every session dropped. Give it a moment, then report.
+                // Claude restarted: every session dropped. The phone sees that right away; the alert
+                // waits 45 seconds, so sessions that come back by themselves don't set it off.
                 if launch != lastLaunch {
                     lastLaunch = launch
                     log("Claude restarted")
-                    sleep(45)   // let it settle, and let sessions you open yourself reconnect
-                    let offline = self.offlineWatched()
-                    lastOffline = Set(offline)
+                    lastOffline = Set(self.offlineWatched())
+                    restartAlertAt = Date().addingTimeInterval(45)
                     self.queue.async { self.sendState() }
-                    guard !offline.isEmpty else { return }
-                    let count = offline.count == 1 ? "1 of your sessions" : "\(offline.count) of your sessions"
-                    self.relay.push(["t": "alert", "title": "Claude restarted on \(computer)", "offline": offline.count,
-                                     "body": "Remote Control is off for \(count). Tap to reconnect."])
+                    return
+                }
+                if let due = restartAlertAt, Date() >= due {
+                    restartAlertAt = nil
+                    let offline = self.offlineWatched().filter { id in self.queue.sync { !self.waking.contains(id) } }
+                    lastOffline = Set(self.offlineWatched())
+                    self.queue.async { self.sendState() }
+                    if !offline.isEmpty {
+                        let count = offline.count == 1 ? "1 of your sessions" : "\(offline.count) of your sessions"
+                        self.relay.push(["t": "alert", "title": "Claude restarted on \(computer)", "offline": offline.count,
+                                         "body": "Remote Control is off for \(count). Tap to reconnect."])
+                    }
                     return
                 }
 
@@ -379,7 +432,8 @@ final class Keeper {
                                  "body": "\(title) can't be reached from your phone. Tap to reconnect."])
             }
             while true {
-                sleep(10)
+                // Every 10 seconds, or sooner when Claude opens, quits or writes to its log.
+                _ = self.watcherNudge.wait(timeout: .now() + 10)
                 autoreleasepool { pass() }
             }
         }

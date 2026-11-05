@@ -124,7 +124,13 @@ struct RemoteControlStatus {
     static func now() -> RemoteControlStatus {
         let launch = claudeApp()?.launchDate
         guard let launch else { return RemoteControlStatus(launch: nil, events: [:]) }
-        return RemoteControlStatus(launch: launch, events: logEvents(since: launch))
+        return RemoteControlStatus(launch: launch, events: cache.events(since: launch))
+    }
+
+    /// Sessions Claude has started since it launched (only those can take /remote-control).
+    static func startedSessions() -> Set<String> {
+        guard let launch = claudeApp()?.launchDate else { return [] }
+        return cache.started(since: launch)
     }
 
     func isOn(_ s: Session) -> Bool {
@@ -136,39 +142,185 @@ struct RemoteControlStatus {
 
     /// The last thing Claude's log says about each session's Remote Control since `start`.
     static func logEvents(since start: Date) -> [String: Bool] {
-        autoreleasepool { readLogEvents(since: start) }
+        autoreleasepool {
+            guard let handle = try? FileHandle(forReadingFrom: claudeLog) else { return [:] }
+            defer { try? handle.close() }
+            let size = handle.seekToEndOfFile()
+            handle.seek(toFileOffset: size > 3_000_000 ? size - 3_000_000 : 0)
+            var parser = Parser(since: logStamp(start.addingTimeInterval(-1)))
+            parser.read(String(decoding: handle.readDataToEndOfFile(), as: UTF8.self))
+            return parser.events
+        }
     }
 
-    private static func readLogEvents(since start: Date) -> [String: Bool] {
-        guard let handle = try? FileHandle(forReadingFrom: claudeLog) else { return [:] }
-        defer { try? handle.close() }
-        let size = handle.seekToEndOfFile()
-        handle.seek(toFileOffset: size > 3_000_000 ? size - 3_000_000 : 0)
-        let text = String(decoding: handle.readDataToEndOfFile(), as: UTF8.self)
-        let since = logStamp(start.addingTimeInterval(-1))
+    /// Reads Claude's log for what each session's Remote Control did.
+    private struct Parser {
+        let since: String
         var events: [String: Bool] = [:]
+        var started: Set<String> = []   // sessions Claude started (it logs "Mapping internal session X")
         var recent: String?   // the session the next "Remote control enabled" belongs to
-        for line in text.split(separator: "\n") where line.contains("emote control") || line.contains("Mapping internal session ") {
-            guard line.prefix(19) >= since else { continue }
-            if let id = sessionId(after: "Enabling remote control for session ", in: line) {
-                recent = id
-            } else if let id = sessionId(after: "Disabling remote control for session ", in: line) {
-                events[id] = false
-                if recent == id { recent = nil }
-            } else if let id = sessionId(after: "Mapping internal session ", in: line) {
-                recent = id
-            } else if line.contains("Remote control enabled"), let id = recent {
-                events[id] = true
-                recent = nil
+
+        init(since: String) { self.since = since }
+
+        mutating func read(_ text: String) {
+            for line in text.split(separator: "\n") where line.contains("emote control") || line.contains("Mapping internal session ") {
+                guard line.prefix(19) >= since else { continue }
+                if let id = RemoteControlStatus.sessionId(after: "Enabling remote control for session ", in: line) {
+                    recent = id
+                } else if let id = RemoteControlStatus.sessionId(after: "Disabling remote control for session ", in: line) {
+                    events[id] = false
+                    if recent == id { recent = nil }
+                } else if let id = RemoteControlStatus.sessionId(after: "Mapping internal session ", in: line) {
+                    recent = id
+                    started.insert(id)
+                } else if line.contains("Remote control enabled"), let id = recent {
+                    events[id] = true
+                    recent = nil
+                }
             }
         }
-        return events
     }
 
-    private static func sessionId(after marker: String, in line: Substring) -> String? {
+    /// The watcher checks often (on every log change), so it reads only what Claude added to its
+    /// log since the last look, instead of the last 3 MB each time.
+    private static let cache = Cache()
+
+    private final class Cache {
+        private let lock = NSLock()
+        private var launch: Date?
+        private var offset: UInt64 = 0
+        private var parser = Parser(since: "")
+
+        func events(since launch: Date) -> [String: Bool] { read(since: launch).events }
+
+        func started(since launch: Date) -> Set<String> { read(since: launch).started }
+
+        private func read(since launch: Date) -> Parser {
+            lock.lock(); defer { lock.unlock() }
+            return autoreleasepool {
+                guard let handle = try? FileHandle(forReadingFrom: claudeLog) else { return Parser(since: "") }
+                defer { try? handle.close() }
+                let size = handle.seekToEndOfFile()
+                if self.launch != launch || size < offset {   // Claude restarted, or started a new log
+                    self.launch = launch
+                    offset = size > 3_000_000 ? size - 3_000_000 : 0
+                    parser = Parser(since: logStamp(launch.addingTimeInterval(-1)))
+                }
+                handle.seek(toFileOffset: offset)
+                let data = handle.readDataToEndOfFile()
+                // Only whole lines: the last one may still be being written.
+                guard let lastNewline = data.lastIndex(of: UInt8(ascii: "\n")) else { return parser }
+                let whole = data[data.startIndex...lastNewline]
+                offset += UInt64(whole.count)
+                parser.read(String(decoding: whole, as: UTF8.self))
+                return parser
+            }
+        }
+    }
+
+    fileprivate static func sessionId(after marker: String, in line: Substring) -> String? {
         guard let range = line.range(of: marker) else { return nil }
         return line[range.upperBound...].split(separator: " ").first.map(String.init)
     }
+}
+
+// MARK: - Plan usage (read-only)
+
+let planUsageFile = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Claude/plan-usage-history.json")
+
+/// The newest plan-usage reading the Claude app saved: it writes one about every 5 minutes while
+/// it's open (percent used per limit: "fh" the 5-hour limit, "sd" weekly across all models, plus
+/// per-model weekly limits when Claude records them). Claude doesn't save reset times, so they're
+/// worked out from its 30 days of readings (see estimateResets). Sent to the phone as
+/// {"at": ms, "limits": {"fh": 7, "sd": 5}, "resets": {"fh": ms, "sd": ms}}. nil with no reading.
+func planUsage() -> [String: Any]? {
+    autoreleasepool {
+        guard let data = try? Data(contentsOf: planUsageFile),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let samples = json["samples"] as? [[String: Any]],
+              let last = samples.last,
+              let at = last["t"] as? Double,
+              let limits = last["u"] as? [String: Any] else { return nil }
+        let percents = limits.compactMapValues { ($0 as? NSNumber)?.doubleValue }
+        guard !percents.isEmpty else { return nil }
+        let readings = samples.compactMap { s -> (t: Double, u: [String: Double])? in
+            guard let t = s["t"] as? Double, let u = s["u"] as? [String: Any] else { return nil }
+            return (t, u.compactMapValues { ($0 as? NSNumber)?.doubleValue })
+        }
+        let resets = estimateResets(readings, now: Date().timeIntervalSince1970 * 1000, firstMessage: firstClaudeMessage(after:))
+        return ["at": Int(at), "limits": percents, "resets": resets.mapValues { Int($0) }]
+    }
+}
+
+/// When the 5-hour and weekly limits reset next (ms since 1970), from Claude's readings.
+/// A reset shows up as a sudden drop. The weekly reset comes at the same time each week, so the
+/// tightest drop on record is repeated weekly. A 5-hour window starts with the first use after a
+/// reset and ends 5 hours later; with no use since the last reset there's no window running.
+/// `firstMessage(after:)` gives the exact time of the first message sent on this Mac after a time
+/// (from Claude's log), which is when a window started if the work was done here.
+func estimateResets(_ readings: [(t: Double, u: [String: Double])], now: Double,
+                    firstMessage: (Double) -> Double? = { _ in nil }) -> [String: Double] {
+    var resets: [String: Double] = [:]
+    let hour = 3_600_000.0, week = 7 * 24 * hour
+    func drops(_ key: String) -> [(before: Double, after: Double, index: Int)] {
+        var out: [(Double, Double, Int)] = []
+        var prev: (t: Double, v: Double)?
+        for (i, r) in readings.enumerated() {
+            guard let v = r.u[key] else { continue }
+            if let p = prev, v < p.v - 3, v <= p.v / 2 { out.append((p.t, r.t, i)) }
+            prev = (r.t, v)
+        }
+        return out
+    }
+    // Weekly: the narrowest drop gives the time of week; the next one after now is the reset.
+    if let best = drops("sd").min(by: { ($0.after - $0.before) < ($1.after - $1.before) }), best.after - best.before <= 2 * hour {
+        var next = (best.before + best.after) / 2
+        while next <= now { next += week }
+        resets["sd"] = next
+    }
+    // 5-hour: the window starts with the first message after the last reset (a drop in the
+    // readings). Best: that message's exact time in Claude's log. Otherwise from the readings: if
+    // the first one after the drop already shows use, it started at the reset itself; else
+    // between the last reading at 0 and the first one above it.
+    if let lastDrop = drops("fh").last, let latest = readings.last(where: { $0.u["fh"] != nil }), (latest.u["fh"] ?? 0) > 0 {
+        let after = readings[lastDrop.index...].filter { $0.u["fh"] != nil }
+        let reset = (lastDrop.before + lastDrop.after) / 2
+        var start: Double?
+        if (after.first?.u["fh"] ?? 0) > 0 {
+            start = reset
+        } else if let firstUse = after.firstIndex(where: { ($0.u["fh"] ?? 0) > 0 }) {
+            start = (after[after.index(before: firstUse)].t + after[firstUse].t) / 2
+        }
+        // A message on this Mac before the readings noticed any use pins the start exactly.
+        if let sent = firstMessage(reset), sent <= (start ?? .infinity) + 10 * 60_000 { start = max(sent, reset) }
+        if let start, start + 5 * hour > now { resets["fh"] = start + 5 * hour }
+    }
+    // Claude's resets land on round times; these are estimates, so round to 10 minutes.
+    let tenMinutes = 600_000.0
+    return resets.mapValues { ($0 / tenMinutes).rounded() * tenMinutes }
+}
+
+/// When the first message after `after` (ms since 1970) was sent in any Claude session on this
+/// Mac, from Claude's log ("Sending message to session"), or nil if none in its recent part.
+func firstClaudeMessage(after: Double) -> Double? {
+    autoreleasepool {
+        guard let handle = try? FileHandle(forReadingFrom: claudeLog) else { return nil }
+        defer { try? handle.close() }
+        let size = handle.seekToEndOfFile()
+        handle.seek(toFileOffset: size > 6_000_000 ? size - 6_000_000 : 0)
+        let since = logStamp(Date(timeIntervalSince1970: after / 1000))
+        for line in String(decoding: handle.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n")
+        where line.contains("Sending message to session") && line.prefix(19) >= since {
+            return logDate(line.prefix(19)).map { $0.timeIntervalSince1970 * 1000 }
+        }
+        return nil
+    }
+}
+
+/// Parses Claude's log time ("2026-11-04 20:31:05", local time).
+func logDate(_ stamp: Substring) -> Date? {
+    logStampFormat.lock.lock(); defer { logStampFormat.lock.unlock() }
+    return logStampFormat.formatter.date(from: String(stamp))
 }
 
 // MARK: - Waking a session
@@ -282,6 +434,10 @@ func isOwnLeftover(_ text: String) -> Bool {
 /// and nobody is using the Mac. Typing goes to whatever box has focus, so without these a wake
 /// could land in another session, or be mixed into what someone is typing.
 func readyToType(_ id: String, pid: pid_t) -> WakeError? {
+    if turnInProgress(id) {
+        log("Wake \(id): a turn started; nothing typed")
+        return .busy
+    }
     guard waitUntilIdle(quiet: 5, seconds: 30) else {
         log("Wake \(id): someone is using the Mac; nothing typed")
         return .userActive
@@ -435,6 +591,14 @@ func type(_ text: String, into pid: pid_t, pressReturn: Bool = true) {
     }
 }
 
+/// Presses one key (by key code) in the Claude process.
+func pressKey(_ key: CGKeyCode, _ pid: pid_t) {
+    let source = CGEventSource(stateID: .hidSystemState)
+    for down in [true, false] {
+        CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)?.postToPid(pid)
+    }
+}
+
 /// Presses Return in the Claude process.
 func pressReturn(_ pid: pid_t) {
     let source = CGEventSource(stateID: .hidSystemState)
@@ -443,7 +607,20 @@ func pressReturn(_ pid: pid_t) {
     }
 }
 
-func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
+/// What a reconnect did. `pendingSince` is set when the wake message went out and Claude is
+/// reconnecting the session on its own; the caller confirms that from Claude's log later.
+struct WakeDone: ExpressibleByStringInterpolation {
+    let text: String
+    var pendingSince: Date? = nil
+
+    init(text: String, pendingSince: Date? = nil) { self.text = text; self.pendingSince = pendingSince }
+    init(stringLiteral value: String) { text = value }
+    init(stringInterpolation: DefaultStringInterpolation) { text = String(stringInterpolation: stringInterpolation) }
+}
+
+/// Reconnects one session. With `verifyLater`, a session that only needs Claude to resume it is
+/// left reconnecting by itself (about a second) while the caller moves on to the next one.
+func wake(_ id: String, dryRun: Bool = false, verifyLater: Bool = false) -> Result<WakeDone, WakeError> {
     guard let target = session(id), !target.archived, FileManager.default.fileExists(atPath: target.cwd) else { return .failure(.noSession) }
     if RemoteControlStatus.now().isOn(target) { return .success("\(target.title): Remote Control is already on.") }
     if dryRun { return .success("Would reconnect \(target.title) (\(id))") }
@@ -469,28 +646,25 @@ func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
     let sinceLaunch = app.launchDate.map { Date().timeIntervalSince($0) } ?? 999
     if sinceLaunch < 60 { sleep(UInt32(60 - sinceLaunch)) }
 
-    // Open the session and make sure Claude actually switched to it.
+    // Open the session and make sure Claude actually switched to it (checked 5 times a second).
     let link = URL(string: "claude://claude.ai/epitaxy/\(id)")!
     var switched = false
     for attempt in 0..<2 where !switched {
         bringClaudeForward(opening: link)
-        for _ in 0..<8 where !switched {
-            sleep(1)
-            switched = shownSessionId() == id
-        }
+        switched = poll(seconds: 8) { shownSessionId() == id }
         if !switched { log("Wake \(id): Claude didn't switch to it (attempt \(attempt + 1))") }
     }
     guard switched else { return .failure(.wrongSession) }
     // A session Claude only just loaded can take a while to show its message box.
-    let attempts = sinceLaunch < 180 ? 15 : 6
-    var focused = false
-    for attempt in 0..<attempts {
-        if attempt == 3 { bringClaudeForward() }
-        if focusMessageBox(app.processIdentifier) { focused = true; break }
-        sleep(1)
+    let pid = app.processIdentifier
+    var tries = 0
+    let focused = poll(seconds: sinceLaunch < 180 ? 15 : 5, every: 0.25) {
+        tries += 1
+        if tries == 12 { bringClaudeForward() }
+        return focusMessageBox(pid)
     }
-    let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none"
     guard focused else {
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none"
         log("Wake \(id): no message box focus (front app: \(front), Claude active: \(app.isActive))")
         return .failure(.noMessageBox)
     }
@@ -498,55 +672,117 @@ func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
     // switches Remote Control off if it's already on.
     if turnInProgress(id) {
         guard waitForTurnToFinish(id) else { return .failure(.busy) }
-        guard focusMessageBox(app.processIdentifier) else { return .failure(.noMessageBox) }
+        guard focusMessageBox(pid) else { return .failure(.noMessageBox) }
     }
     if RemoteControlStatus.now().isOn(session(id) ?? target) { return .success("\(target.title): Remote Control is already on.") }
 
-    // 1. Claude's own /remote-control command: no Claude usage, and it also works when the
-    //    session's switch was turned off. It only works while the session's process is running.
-    let pid = app.processIdentifier
-    if let problem = readyToType(id, pid: pid) { return .failure(problem) }
-    let started = Date()
-    switch runRemoteControlCommand(id, pid: pid, since: started) {
-    case .on:
-        return .success("\(target.title): Remote Control is back on.")
-    case .switchedOff:
-        // It was on after all and the command switched it off: switch it back on.
-        log("/remote-control switched \(id) off; switching it back on")
+    // 1. A session Claude is running: its own /remote-control command (no Claude usage; also
+    //    works when the session's switch was turned off). Sessions Claude hasn't started since it
+    //    launched can't take it ("no active query"), so they skip straight to step 2.
+    if sessionStarted(id) {
         if let problem = readyToType(id, pid: pid) { return .failure(problem) }
-        return runRemoteControlCommand(id, pid: pid, since: Date()) == .on
-            ? .success("\(target.title): Remote Control is on.") : .failure(.noReply)
-    case .notRunning, .nothing:
-        break
+        switch runRemoteControlCommand(id, pid: pid, since: Date()) {
+        case .on:
+            return .success("\(target.title): Remote Control is back on.")
+        case .switchedOff:
+            // It was on after all and the command switched it off: switch it back on.
+            log("/remote-control switched \(id) off; switching it back on")
+            if let problem = readyToType(id, pid: pid) { return .failure(problem) }
+            return runRemoteControlCommand(id, pid: pid, since: Date()) == .on
+                ? .success("\(target.title): Remote Control is on.") : .failure(.noReply)
+        case .notRunning, .nothing:
+            guard focusMessageBox(pid) else { return .failure(.noMessageBox) }
+        }
     }
 
-    // 2. The session isn't running (Claude only keeps a few running). One short message starts
-    //    it; a session whose switch is on reconnects by itself after that turn, and otherwise
-    //    /remote-control works now.
-    let before = session(id) ?? target
-    guard focusMessageBox(pid) else { return .failure(.noMessageBox) }
+    // 2. One short message starts the session, and Claude turns Remote Control back on by itself
+    //    as it resumes ("cold resume"), about a second later. No need to wait for the reply.
+    //    A session whose own switch is off doesn't reconnect by itself: once it's resumed,
+    //    /remote-control works.
     if let problem = readyToType(id, pid: pid) { return .failure(problem) }
+    let switchedOff = (session(id) ?? target).userEnabled == false
     let sent = Date()
     type(wakeText, into: pid)
     log("Sent the wake message to \(id) to start it")
-    var startedTurn = false
-    for _ in 0..<30 {
-        sleep(2)
-        if RemoteControlStatus.logEvents(since: sent)[id] == true { return .success("\(target.title): Remote Control is back on.") }
-        if claudeLogContains("Mapping internal session \(id)", since: sent) { startedTurn = true; break }
-        if let now = session(id), now.turns > before.turns || now.lastTurn > before.lastTurn { startedTurn = true; break }
+    if verifyLater && !switchedOff {
+        return .success(WakeDone(text: "\(target.title): reconnecting", pendingSince: sent))
     }
-    guard startedTurn else { return .failure(.noReply) }
-    sleep(4)
-    if RemoteControlStatus.logEvents(since: sent)[id] == true || RemoteControlStatus.now().isOn(session(id) ?? target) {
-        return .success("\(target.title): Remote Control is back on.")
+    var resumed = false
+    let on = poll(seconds: 20) {
+        let lines = claudeLogLines(since: sent, about: id)
+        resumed = resumed || lines.contains { $0.contains("Mapping internal session \(id)") || $0.contains("Resuming session \(id)") }
+        return lines.contains { $0.contains("Enabling remote control for session \(id)") } || (switchedOff && resumed)
     }
-    guard focusMessageBox(pid) else { return .failure(.noMessageBox) }
+    if on && !switchedOff { return .success("\(target.title): Remote Control is back on.") }
+    guard resumed else { return .failure(.noReply) }
+    // It started but didn't reconnect by itself (its switch is off): now /remote-control works.
+    guard waitForTurnToFinish(id), focusMessageBox(pid) else { return .failure(.noMessageBox) }
     if let problem = readyToType(id, pid: pid) { return .failure(problem) }
-    switch runRemoteControlCommand(id, pid: pid, since: Date()) {
-    case .on: return .success("\(target.title): Remote Control is back on.")
-    default: return .failure(.noReply)
+    return runRemoteControlCommand(id, pid: pid, since: Date()) == .on
+        ? .success("\(target.title): Remote Control is back on.") : .failure(.noReply)
+}
+
+/// Reconnects sessions in order without waiting on each one. A session Claude resumes reconnects
+/// by itself about a second after its wake message, so that's confirmed from Claude's log while
+/// the next session is being typed. Any that don't come back, or failed only because Claude wasn't
+/// ready, get one full try at the end. `report` is called once per session.
+func wakeMany(_ ids: [String], report: (String, Result<WakeDone, WakeError>) -> Void) {
+    var pending: [(id: String, since: Date)] = []
+    var again: [String] = []
+    func settle(final: Bool) {
+        pending.removeAll { item in
+            if claudeLogLines(since: item.since, about: item.id).contains(where: { $0.contains("Enabling remote control for session \(item.id)") }) {
+                log("Claude reconnected \(item.id) by itself after the wake message")
+                report(item.id, .success("\(session(item.id)?.title ?? "That session"): Remote Control is back on."))
+                return true
+            }
+            if final || Date().timeIntervalSince(item.since) > 15 { again.append(item.id); return true }
+            return false
+        }
     }
+    for id in ids {
+        let result = wake(id, verifyLater: true)
+        switch result {
+        case .success(let done) where done.pendingSince != nil:
+            pending.append((id, done.pendingSince!))
+        case .failure(let error) where error.worthRetrying:
+            log("Wake \(id): will try again after the others")
+            again.append(id)
+        default:
+            report(id, result)
+        }
+        settle(final: false)
+    }
+    _ = poll(seconds: 15) { settle(final: false); return pending.isEmpty }
+    settle(final: true)
+    for id in again { report(id, wake(id)) }
+}
+
+/// Runs `check` every `every` seconds until it's true or `seconds` pass.
+func poll(seconds: Double, every: Double = 0.2, _ check: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(seconds)
+    repeat {
+        if autoreleasepool(invoking: check) { return true }
+        usleep(useconds_t(every * 1_000_000))
+    } while Date() < deadline
+    return autoreleasepool(invoking: check)
+}
+
+/// Claude's log lines about one session since `start` (from the last 300 KB, so it's quick).
+func claudeLogLines(since start: Date, about id: String) -> [Substring] {
+    guard let handle = try? FileHandle(forReadingFrom: claudeLog) else { return [] }
+    defer { try? handle.close() }
+    let size = handle.seekToEndOfFile()
+    handle.seek(toFileOffset: size > 300_000 ? size - 300_000 : 0)
+    let since = logStamp(start.addingTimeInterval(-1))
+    return String(decoding: handle.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n")
+        .filter { $0.contains(id) && $0.prefix(19) >= since }
+}
+
+/// Whether Claude has started this session's process since it launched (only then can it take
+/// /remote-control). Claude logs "Mapping internal session X" when it does.
+func sessionStarted(_ id: String) -> Bool {
+    RemoteControlStatus.startedSessions().contains(id)
 }
 
 enum CommandOutcome { case on, switchedOff, notRunning, nothing }
@@ -554,23 +790,26 @@ enum CommandOutcome { case on, switchedOff, notRunning, nothing }
 /// Types /remote-control into the open session and reads Claude's log for what it did.
 func runRemoteControlCommand(_ id: String, pid: pid_t, since start: Date) -> CommandOutcome {
     type(remoteControlCommand, into: pid, pressReturn: false)
-    usleep(700_000)
+    usleep(300_000)
+    // Escape closes Claude's command menu, so Return sends exactly what was typed. (With the menu
+    // open, Return can rewrite the text and leave it in the box.)
+    pressKey(53, pid)
+    usleep(150_000)
     pressReturn(pid)
-    for attempt in 0..<12 {
-        sleep(1)
-        if let on = RemoteControlStatus.logEvents(since: start)[id] {
-            if on { log("Turned Remote Control on for \(id) with /remote-control") }
-            return on ? .on : .switchedOff
-        }
-        if claudeLogContains("Cannot toggle remote control for \(id)", since: start) {
-            log("/remote-control: \(id) isn't running")
-            return .notRunning
-        }
-        // The first Return may only have picked it from the command menu. Press again only if
-        // it's still this session and nobody is typing.
-        if attempt == 3, shownSessionId() == id, secondsSinceInput() >= 3 { pressReturn(pid) }
+    var outcome = CommandOutcome.nothing
+    _ = poll(seconds: 8) {
+        let lines = claudeLogLines(since: start, about: id)
+        if lines.contains(where: { $0.contains("Enabling remote control for session \(id)") }) { outcome = .on }
+        else if lines.contains(where: { $0.contains("Disabling remote control for session \(id)") }) { outcome = .switchedOff }
+        else if lines.contains(where: { $0.contains("Cannot toggle remote control for \(id)") }) { outcome = .notRunning }
+        return outcome != .nothing
     }
-    return .nothing
+    switch outcome {
+    case .on: log("Turned Remote Control on for \(id) with /remote-control")
+    case .notRunning: log("/remote-control: \(id) isn't running")
+    default: break
+    }
+    return outcome
 }
 
 /// Whether Claude's log has a line containing `text` since `start`.

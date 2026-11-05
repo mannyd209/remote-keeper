@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.11
+
+- Much faster Reconnect All: sessions Claude hasn't started since a restart now get their wake message and Remote Keeper moves straight on to the next one, while Claude turns Remote Control back on by itself (about a second each). It confirms each one from Claude's log and gives any stragglers a second try at the end. About 1–2 seconds per session instead of 10–15.
+- Reconnects in the order your phone sends (set it with Reorder Sessions in the iPhone app 1.2), so your most important sessions come back first.
+- Instant updates: your phone hears right away when Claude opens or quits, or a session's Remote Control changes, instead of waiting up to a minute.
+- Shows Claude's plan usage on your phone (iPhone app 1.2): the 5-hour and weekly limits from the reading Claude last saved on the Mac, with estimated reset times. Read-only, from Claude's own usage file.
+- Presses Escape before Return, so Claude's command menu can't rewrite what was typed. Reads only the new part of Claude's log on each check, so watching more often costs less.
+
 ## 0.3.10
 
 - Reconnect All right after a Claude restart no longer leaves one behind: a session that fails only because Claude wasn't ready yet (no message box, or Claude didn't switch to it) is tried once more after the others, before your phone hears it failed.

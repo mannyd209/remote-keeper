@@ -13,7 +13,7 @@
 import AppKit
 import Foundation
 
-let keeperVersion = "0.3.10"
+let keeperVersion = "0.3.11"
 
 let args = Array(CommandLine.arguments.dropFirst()).filter { !$0.hasPrefix("-NS") && !$0.hasPrefix("-Apple") }
 switch args.first ?? "" {
@@ -23,6 +23,17 @@ case "list":
     for s in liveSessions().prefix(40) {
         print("\(status.isOn(s) ? "on " : "off") \(s.pinned ? "★" : " ") \(s.title)\t\(s.id)")
     }
+case "wake" where args.dropFirst().filter({ !$0.hasPrefix("--") }).count > 1:
+    // Several session ids: the same quick pass the phone's Reconnect All uses.
+    let started = Date()
+    wakeMany(Array(args.dropFirst().filter { !$0.hasPrefix("--") })) { id, result in
+        let t = String(format: "%5.1fs", Date().timeIntervalSince(started))
+        switch result {
+        case .success(let done): print("\(t) ✅ \(done.text)")
+        case .failure(let error): print("\(t) ⚠️ \(session(id)?.title ?? id): \(error.description)")
+        }
+    }
+    print(String(format: "Done in %.1fs", Date().timeIntervalSince(started)))
 case "wake":
     let target = args.dropFirst().first { !$0.hasPrefix("--") } ?? ""
     let live = liveSessions()
@@ -31,7 +42,7 @@ case "wake":
         print("No session matches '\(target)'. Run: remote-keeper list"); exit(1)
     }
     switch wake(match.id, dryRun: args.contains("--dry-run")) {
-    case .success(let message): print(args.contains("--dry-run") ? message : "✅ \(message)")
+    case .success(let done): print(args.contains("--dry-run") ? done.text : "✅ \(done.text)")
     case .failure(let error): print("⚠️ \(error.description)"); exit(1)
     }
 case "version":
