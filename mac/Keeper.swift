@@ -258,23 +258,32 @@ final class Keeper {
         guard !ids.isEmpty else { sendState(); return }
         ids.forEach { waking.insert($0) }
         sendState()
-        for id in ids {
-            wakeQueue.async {
-                let result = wake(id)
-                self.queue.async {
-                    self.waking.remove(id)
-                    let name = session(id)?.title ?? "That session"
-                    switch result {
-                    case .success(let text): self.relay.send(["t": "result", "id": id, "ok": true, "text": text])
-                    case .failure(let error):
-                        self.relay.send(["t": "result", "id": id, "ok": false, "text": "\(name): \(error.description)"])
-                        if case .noAccessibility = error { DispatchQueue.main.async { self.onNeedsSettings?() } }
-                    }
-                    self.sendState()
-                }
-                sleep(2)
-            }
+        for id in ids { wakeQueue.async { self.runWake(id, isRetry: false) } }
+    }
+
+    /// One reconnect, on the wake queue. If Claude simply wasn't ready (no message box yet, or it
+    /// didn't switch to the session), it goes to the back of the line once before the phone hears
+    /// it failed: right after a restart the first few can come too early.
+    private func runWake(_ id: String, isRetry: Bool) {
+        let result = wake(id)
+        if !isRetry, case .failure(let error) = result, error.worthRetrying {
+            log("Wake \(id): will try again after the others")
+            wakeQueue.async { self.runWake(id, isRetry: true) }
+            sleep(2)
+            return
         }
+        queue.async {
+            self.waking.remove(id)
+            let name = session(id)?.title ?? "That session"
+            switch result {
+            case .success(let text): self.relay.send(["t": "result", "id": id, "ok": true, "text": text])
+            case .failure(let error):
+                self.relay.send(["t": "result", "id": id, "ok": false, "text": "\(name): \(error.description)"])
+                if case .noAccessibility = error { DispatchQueue.main.async { self.onNeedsSettings?() } }
+            }
+            self.sendState()
+        }
+        sleep(2)
     }
 
     func offlineWatched() -> [String] {

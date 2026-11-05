@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.10
+
+- Reconnect All right after a Claude restart no longer leaves one behind: a session that fails only because Claude wasn't ready yet (no message box, or Claude didn't switch to it) is tried once more after the others, before your phone hears it failed.
+- More patience after a restart: waits until Claude has been open a minute, and gives a session Claude just loaded longer to show its message box.
+- If a session's message box holds only Remote Keeper's own leftover text (its /remote-control command or wake message), it clears it and carries on. Anything else in the box still means nothing is typed.
+
 ## 0.3.9
 
 - Never types into the wrong place. Right before typing anything, Remote Keeper now checks that Claude is actually showing the session it's reconnecting, that the session's message box is empty, and that nobody is using the Mac. If any of those isn't true, nothing is typed and your phone says why. (Before, if Claude stayed on another session, the reconnect could be typed into that session, mixed into whatever you were writing.)

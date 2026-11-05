@@ -257,6 +257,27 @@ func waitUntilIdle(quiet: Double, seconds: Double) -> Bool {
     return true
 }
 
+/// Clears Claude's focused message box (⌘A, Delete).
+func clearMessageBox(_ pid: pid_t) {
+    let source = CGEventSource(stateID: .hidSystemState)
+    for (key, flags) in [(CGKeyCode(0), CGEventFlags.maskCommand), (CGKeyCode(51), CGEventFlags())] {
+        for down in [true, false] {
+            let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)
+            event?.flags = flags
+            event?.postToPid(pid)
+        }
+        usleep(150_000)
+    }
+    usleep(300_000)
+}
+
+/// Text Remote Keeper itself may have left in a message box (its command, which Claude's command
+/// menu can leave without the slash, or its wake message). Anything else belongs to the person.
+func isOwnLeftover(_ text: String) -> Bool {
+    let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    return t == "remote-control" || t == remoteControlCommand || t == wakeText
+}
+
 /// Checked right before anything is typed: Claude shows this session, its message box is empty,
 /// and nobody is using the Mac. Typing goes to whatever box has focus, so without these a wake
 /// could land in another session, or be mixed into what someone is typing.
@@ -271,6 +292,11 @@ func readyToType(_ id: String, pid: pid_t) -> WakeError? {
         return .wrongSession
     }
     if let text = messageBoxText(pid), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if isOwnLeftover(text) {
+            clearMessageBox(pid)
+            log("Wake \(id): cleared text Remote Keeper had left in its message box")
+            if let after = messageBoxText(pid), after.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+        }
         log("Wake \(id): its message box has unsent text; nothing typed")
         return .draft
     }
@@ -292,6 +318,14 @@ enum WakeError: Error, CustomStringConvertible {
         case .wrongSession: return "Claude didn't switch to that session, so nothing was typed. Tap Reconnect to try again."
         case .draft: return "there's unsent text in that session's message box, so nothing was typed. Send or clear it, then tap Reconnect."
         case .userActive: return "someone is using the Mac right now, so nothing was typed. Tap Reconnect again in a moment."
+        }
+    }
+
+    /// Claude wasn't ready yet; trying again a little later usually works.
+    var worthRetrying: Bool {
+        switch self {
+        case .noMessageBox, .wrongSession: return true
+        default: return false
         }
     }
 }
@@ -432,9 +466,8 @@ func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
     }
     guard let app = claudeApp() else { return .failure(.claudeNotRunning) }
     // Right after Claude starts, its window isn't ready for a while.
-    if let launched = app.launchDate, Date().timeIntervalSince(launched) < 45 {
-        sleep(UInt32(45 - Date().timeIntervalSince(launched)))
-    }
+    let sinceLaunch = app.launchDate.map { Date().timeIntervalSince($0) } ?? 999
+    if sinceLaunch < 60 { sleep(UInt32(60 - sinceLaunch)) }
 
     // Open the session and make sure Claude actually switched to it.
     let link = URL(string: "claude://claude.ai/epitaxy/\(id)")!
@@ -448,8 +481,10 @@ func wake(_ id: String, dryRun: Bool = false) -> Result<String, WakeError> {
         if !switched { log("Wake \(id): Claude didn't switch to it (attempt \(attempt + 1))") }
     }
     guard switched else { return .failure(.wrongSession) }
+    // A session Claude only just loaded can take a while to show its message box.
+    let attempts = sinceLaunch < 180 ? 15 : 6
     var focused = false
-    for attempt in 0..<6 {
+    for attempt in 0..<attempts {
         if attempt == 3 { bringClaudeForward() }
         if focusMessageBox(app.processIdentifier) { focused = true; break }
         sleep(1)
