@@ -96,6 +96,10 @@ To add another Mac, install Remote Keeper on it, then tap **＋** in the app on 
 
 **Updates:** Remote Keeper checks this page's releases and offers **Update** in its menu. It only installs an update that's signed by MannyD Labs and notarized by Apple.
 
+### Windows (coming soon)
+
+Remote Keeper for Windows is in testing, and its source is in [`windows/`](windows/). It's a small tray app (one `.exe` for Arm64 or x64 PCs, no installer or admin rights) that does what the Mac app does: it watches your Claude Code sessions in the Claude app for Windows, alerts your phone when Remote Control goes off, and turns it back on with the session's own Remote Control switch (or `/remote-control`, or one short message for a session Claude hasn't started). It also reads your Claude usage, restarts Claude from your phone, and works with the same phone app and relay. Downloads will appear on this page's releases.
+
 ## Privacy and security
 
 - **It only ever types Claude's /remote-control command** (or, as a fallback, one fixed message). Nothing you type on your phone is sent to your computer, so Remote Keeper can't be used to run commands on it.
