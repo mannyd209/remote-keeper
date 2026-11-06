@@ -20,7 +20,7 @@ static class Program
     static int Main(string[] args)
     {
         var command = args.FirstOrDefault() ?? "";
-        if (command is "list" or "status" or "wake" or "usage" or "version")
+        if (command is "list" or "status" or "wake" or "usage" or "version" or "restart-claude")
         {
             Console = Native.AttachConsole(-1) || true;
             try { return RunCommand(command, args.Skip(1).ToArray()); }
@@ -68,6 +68,17 @@ static class Program
                 Say($"Claude started: {status.Launch?.ToString() ?? "not running"}");
                 foreach (var s in Claude.LiveSessions().Take(40))
                     Say($"{(status.IsOn(s) ? "on " : "off")} {(s.Pinned ? "*" : " ")} {s.Title}\t{s.Id}");
+                return 0;
+            }
+            case "restart-claude":
+            {
+                // Testing: what the phone's Restart Claude does, without the reconnect.
+                var started = DateTime.Now;
+                Keeper.QuitClaude();
+                Say($"Claude quit after {(DateTime.Now - started).TotalSeconds:0.0}s");
+                Thread.Sleep(3000);
+                Claude.Launch();
+                Say(Wait.Poll(120, () => Claude.Running, 1) ? $"Claude open again after {(DateTime.Now - started).TotalSeconds:0.0}s" : "Claude didn't open again");
                 return 0;
             }
             case "usage":

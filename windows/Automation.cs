@@ -160,6 +160,54 @@ static class Automation
         }
     }
 
+    // MARK: Quitting Claude
+
+    const int MenuItemType = 50011, InvokePattern = 10000;
+
+    static bool Invoke(IUIAutomationElement e)
+    {
+        try
+        {
+            if (e.GetCurrentPattern(InvokePattern) is IUIAutomationInvokePattern i) { i.Invoke(); return true; }
+            if (e.GetCurrentPattern(ExpandCollapsePattern) is IUIAutomationExpandCollapsePattern x) { x.Expand(); return true; }
+        }
+        catch (Exception ex) { Log.Write("Invoke: " + ex.Message); }
+        return false;
+    }
+
+    /// Claude's Menu → File → Exit, through UI Automation. False if the menu couldn't be found.
+    public static bool QuitClaude(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero) return false;
+        if (Native.IsIconic(hWnd) || !Native.IsWindowVisible(hWnd)) Native.ShowWindow(hWnd, Native.SW_RESTORE);
+        if (!WaitForTree(hWnd, 10)) return false;
+        IUIAutomationElement? Item(string name) =>
+            Find(hWnd, e => e.CurrentControlType == MenuItemType && e.CurrentName == name).FirstOrDefault();
+        // The File menu shows once the window's Menu button is pressed.
+        var file = Item("File");
+        if (file == null)
+        {
+            var menu = Find(hWnd, e => e.CurrentControlType == ButtonType && e.CurrentName == "Menu").FirstOrDefault();
+            if (menu == null || !Invoke(menu)) return false;
+            Wait.Poll(3, () => (file = Item("File")) != null, 0.2);
+        }
+        if (file == null || !Invoke(file)) return false;
+        IUIAutomationElement? exit = null;
+        if (!Wait.Poll(3, () => (exit = Find(hWnd, e => e.CurrentControlType == MenuItemType && (e.CurrentName == "Exit" || e.CurrentName == "Quit" || (e.CurrentName ?? "").StartsWith("Quit "))).FirstOrDefault()) != null, 0.2) || exit == null)
+            return false;
+        return Invoke(exit);
+    }
+
+    /// If Claude asks whether to quit, says yes once (its Quit / Exit button).
+    public static bool ConfirmQuit(IntPtr hWnd)
+    {
+        if (hWnd == IntPtr.Zero) return false;
+        var button = Find(hWnd, e => e.CurrentControlType == ButtonType && e.CurrentName is "Quit" or "Exit" or "Quit Claude" or "Quit anyway" or "Quit Anyway").FirstOrDefault();
+        if (button == null) return false;
+        Log.Write($"Claude asked to confirm quitting; pressing {button.CurrentName}");
+        return Invoke(button);
+    }
+
     // MARK: The message box
 
     /// Claude's message box (the Edit named "Prompt"); the lowest one if there are several.

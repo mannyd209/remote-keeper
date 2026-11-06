@@ -325,15 +325,16 @@ sealed class Keeper
         });
     }
 
-    /// Asks Claude's windows to close, then ends any Claude process still running after 15 seconds.
-    static void QuitClaude()
+    /// Quits Claude the way you would (its Menu → File → Exit), so it shuts down properly and installs
+    /// a downloaded update. Closing its window only hides it in the tray. If it asks to confirm,
+    /// confirms once. Only if it's still running 20 seconds later is it ended.
+    public static void QuitClaude()
     {
-        foreach (var p in Claude.Processes())
-        {
-            try { if (p.MainWindowHandle != IntPtr.Zero) p.CloseMainWindow(); } catch { }
-            p.Dispose();
-        }
-        if (Wait.Poll(15, () => !Claude.Running, 0.5)) return;
+        var how = Automation.QuitClaude(Claude.MainWindow()) ? "its own Exit" : "no Exit found";
+        if (Wait.Poll(8, () => !Claude.Running, 0.5)) { Log.Write($"Claude quit ({how})"); return; }
+        if (Automation.ConfirmQuit(Claude.MainWindow()) && Wait.Poll(12, () => !Claude.Running, 0.5)) { Log.Write("Claude quit (after confirming)"); return; }
+        if (Wait.Poll(4, () => !Claude.Running, 0.5)) { Log.Write($"Claude quit ({how})"); return; }
+        Log.Write("Claude didn't quit by itself; ending it");
         foreach (var p in Claude.Processes())
         {
             try { p.Kill(entireProcessTree: true); } catch { }
