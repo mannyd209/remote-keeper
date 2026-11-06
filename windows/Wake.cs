@@ -77,29 +77,47 @@ static class Waker
         }
         var launch = Claude.LaunchDate();
         if (launch == null) return WakeResult.Fail(WakeError.ClaudeNotRunning);
-        // Right after Claude starts, its window isn't ready for a while.
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        void Step(string what) => Log.Write($"Wake {id}: {what} (+{clock.Elapsed.TotalSeconds:0.0}s)");
+        // Right after Claude starts, its window isn't ready for a while: wait until it shows its
+        // message box (its page has loaded), up to a minute after it started.
         var sinceLaunch = (DateTime.Now - launch.Value).TotalSeconds;
-        if (sinceLaunch < 60) Thread.Sleep(TimeSpan.FromSeconds(60 - sinceLaunch));
+        if (sinceLaunch < 60)
+        {
+            var ready = Wait.Poll(60 - sinceLaunch, () =>
+            {
+                var w = Claude.MainWindow();
+                if (w == IntPtr.Zero || !Native.IsWindowVisible(w)) return false;
+                Automation.EnableAccessibility(w);
+                return Automation.MessageBox(w) != null;
+            }, 1);
+            Step(ready ? "Claude's window is ready" : "Claude's window still loading; going ahead");
+            Thread.Sleep(1500);   // its session list loads just after the page
+        }
 
         // Open the session and make sure Claude actually switched to it.
         var switched = false;
-        for (var attempt = 0; attempt < 2 && !switched; attempt++)
+        for (var attempt = 0; attempt < 3 && !switched; attempt++)
         {
             Claude.Open($"claude://claude.ai/epitaxy/{id}");
             switched = Wait.Poll(8, () => Claude.ShownSessionId() == id);
             if (!switched) Log.Write($"Wake {id}: Claude didn't switch to it (attempt {attempt + 1})");
         }
         if (!switched) return WakeResult.Fail(WakeError.WrongSession);
+        Step("Claude shows the session");
 
         var hWnd = Claude.MainWindow();
         Automation.BringForward(hWnd);
-        Automation.WaitForTree(hWnd, sinceLaunch < 180 ? 15 : 8);
+        var tree = Automation.WaitForTree(hWnd, sinceLaunch < 180 ? 15 : 8);
+        Step(tree ? "its window is readable" : "its window isn't readable yet");
 
         // 0. A session Claude is running: its own Remote Control switch. Nothing typed.
         if (Started(id) && PressSwitch(id, hWnd, 3) == true) return WakeResult.Ok($"{target.Title}: Remote Control is back on.");
 
         // A session Claude only just loaded can take a while to show its message box.
-        if (!FocusMessageBox(hWnd, sinceLaunch < 180 ? 15 : 5))
+        var focused = FocusMessageBox(hWnd, sinceLaunch < 180 ? 15 : 5);
+        Step(focused ? "message box focused" : "message box didn't take focus");
+        if (!focused)
         {
             Log.Write($"Wake {id}: no message box focus (Claude in front: {Automation.ClaudeInFront()})");
             return WakeResult.Fail(WakeError.NoMessageBox);
@@ -135,6 +153,7 @@ static class Waker
         //    as it resumes, about a second later. A session whose own switch is off doesn't
         //    reconnect by itself: once it's resumed, /remote-control (or its switch) works.
         if (ReadyToType(id, hWnd) is WakeError p2) return WakeResult.Fail(p2);
+        Step("ready to type");
         var switchedOff = (Claude.Session(id) ?? target).UserEnabled == false;
         var sent = DateTime.Now;
         if (!Automation.Type(WakeText)) return WakeResult.Fail(WakeError.NotInFront);
