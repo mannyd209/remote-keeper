@@ -27,9 +27,9 @@ static class Relay
     static DateTime offsetCheckedAt = DateTime.MinValue;
 
     /// The relay's time, from its Date header (checked at most every 10 minutes).
-    public static async Task SyncClockAsync()
+    public static async Task SyncClockAsync(bool force = false)
     {
-        if (DateTime.UtcNow - offsetCheckedAt < TimeSpan.FromMinutes(10) || !Configured) return;
+        if ((!force && DateTime.UtcNow - offsetCheckedAt < TimeSpan.FromMinutes(10)) || !Configured) return;
         offsetCheckedAt = DateTime.UtcNow;
         try
         {
@@ -42,8 +42,9 @@ static class Relay
                 var local = sent + (received - sent) / 2;
                 var offset = (long)(server - local).TotalMilliseconds;
                 // The header has whole seconds: only correct a real difference.
+                var previous = ClockOffsetMs;
                 ClockOffsetMs = Math.Abs(offset) > 2000 ? offset : 0;
-                if (ClockOffsetMs != 0) Log.Write($"This PC's clock is {-ClockOffsetMs / 1000.0:0}s off from the relay's; correcting for it");
+                if (ClockOffsetMs != 0 && Math.Abs(ClockOffsetMs - previous) > 2000) Log.Write($"This PC's clock is {-ClockOffsetMs / 1000.0:0}s off from the relay's; correcting for it");
             }
         }
         catch (Exception e) { Log.Write("Clock check: " + e.Message); }
@@ -119,7 +120,8 @@ sealed class RelayConnection
     readonly Dictionary<string, DateTime> seen = new();   // nonces of recent messages, so a replay is ignored
     ClientWebSocket? socket;
     DateTime lastHeard = DateTime.UtcNow;
-    volatile bool stopped;
+    volatile bool stopped, forceClockCheck;
+    readonly SemaphoreSlim retryNow = new(0);   // Reconnect() cuts a wait between attempts short
     Timer? heartbeat;
     public volatile bool Connected;
 
@@ -148,6 +150,16 @@ sealed class RelayConnection
         }, null, TimeSpan.FromSeconds(25), TimeSpan.FromSeconds(25));
     }
 
+    /// After sleep the old connection is dead but may not say so for a while: start a new one now.
+    public void Reconnect()
+    {
+        forceClockCheck = true;
+        if (retryNow.CurrentCount == 0) retryNow.Release();
+        // A connection that just heard from the relay is a new one (it reconnected by itself).
+        if (Connected && DateTime.UtcNow - lastHeard < TimeSpan.FromSeconds(10)) return;
+        try { socket?.Abort(); } catch { }
+    }
+
     public void Stop()
     {
         stopped = true;
@@ -160,7 +172,9 @@ sealed class RelayConnection
         var retry = 0;
         while (!stopped && Relay.Configured)
         {
-            await Relay.SyncClockAsync();
+            // A failed attempt may be a clock that moved (after sleep, or a time sync): check it again.
+            await Relay.SyncClockAsync(force: retry > 0 || forceClockCheck);
+            forceClockCheck = false;
             var ws = new ClientWebSocket();
             ws.Options.SetRequestHeader("User-Agent", $"RemoteKeeper/{App.Version} (Windows)");
             ws.Options.SetRequestHeader("X-Keeper-Auth", Relay.Signature(keys.Channel));
@@ -179,7 +193,7 @@ sealed class RelayConnection
             }
             catch (Exception e) when (!stopped)
             {
-                if (retry == 0) Log.Write("Relay connection: " + e.Message);
+                if (retry == 0 || retry == 3 || retry % 10 == 0) Log.Write($"Relay connection (attempt {retry + 1}): " + e.Message);
             }
             finally
             {
@@ -190,7 +204,7 @@ sealed class RelayConnection
             if (stopped) break;
             var delay = Math.Min(30, Math.Pow(2, retry));
             retry++;
-            await Task.Delay(TimeSpan.FromSeconds(delay));
+            await retryNow.WaitAsync(TimeSpan.FromSeconds(delay));
         }
     }
 

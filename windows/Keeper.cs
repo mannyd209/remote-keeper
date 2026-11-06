@@ -50,7 +50,11 @@ sealed class Keeper
     // MARK: Sleep and the offline alert
 
     public void WillSleep() { awake = false; Relay.WithdrawWill(); }
-    public void DidWake() { awake = true; SendWill(); }
+    public void DidWake()
+    {
+        awake = true;
+        Relay.Reconnect();   // the will is armed again once it's connected (see Connect)
+    }
 
     /// The alert the relay sends if this PC goes quiet (see RelayConnection.SetWill).
     public void SendWill()
