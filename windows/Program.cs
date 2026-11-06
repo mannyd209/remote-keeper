@@ -82,6 +82,7 @@ static class Program
                 return 0;
             }
             case "usage":
+                if (rest.Contains("--tray")) Say(Usage.KeepClaudeChecking(force: true) ? "Opened and closed Claude's tray menu" : "Couldn't open Claude's tray menu");
                 if (rest.Contains("--refresh")) Say(Usage.Refresh(force: true) ? "Read Claude's usage popup" : "Couldn't read Claude's usage popup");
                 Say(Usage.Plan()?.ToJsonString() ?? "No usage reading");
                 return 0;

@@ -419,6 +419,8 @@ sealed class Keeper
 
             void Pass()
             {
+                // Keep Claude checking usage by itself (see Usage.KeepClaudeChecking).
+                if (Usage.KeepClaudeChecking() && PhoneLinked) queue.After(TimeSpan.FromSeconds(8), SendState);
                 if (Claude.LogPath != logPath) { logPath = Claude.LogPath; WatchClaudeFiles(); }
                 var launch = Claude.LaunchDate();
 

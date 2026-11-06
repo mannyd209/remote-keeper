@@ -531,15 +531,21 @@ static class Usage
             var labels = new Dictionary<string, string>();
             var at = last.t;
             // Claude's own usage popup, read live (see Refresh): newer numbers and exact reset times.
-            if (LiveReading is { } live && live.at > last.t - 60_000 && Wait.NowMs - live.at < 6 * 3_600_000)
+            // Its percents count when they're newer than the saved file's; its reset times (exact,
+            // where the file has none) count while they're still ahead.
+            if (LiveReading is { } live && Wait.NowMs - live.at < 24 * 3_600_000)
             {
-                at = Math.Max(at, live.at);
+                var newer = live.at > last.t - 60_000;
+                if (newer) at = Math.Max(at, live.at);
                 for (var i = 0; i < live.rows.Count; i++)
                 {
                     var row = live.rows[i];
                     var key = Keys.TryGetValue(row.label, out var k) ? k : $"m{i}";
-                    if (!Keys.ContainsKey(row.label)) labels[key] = row.label;
-                    shown[key] = row.percent;
+                    if (newer || !shown.ContainsKey(key))
+                    {
+                        if (!Keys.ContainsKey(row.label)) labels[key] = row.label;
+                        if (newer) shown[key] = row.percent;
+                    }
                     if (row.resetAt is double r && r > Wait.NowMs) resets[key] = r;
                 }
             }
@@ -632,6 +638,29 @@ static class Usage
         LiveReading = new Reading(Wait.NowMs, rows.Select(r => new Row(r.label, r.percent, r.reset == null ? null : ParseReset(r.reset, now))).ToList());
         Log.Write("Claude's usage: " + string.Join(", ", rows.Select(r => $"{r.label} {r.percent:0}%" + (r.reset != null ? $" ({r.reset})" : ""))));
         return true;
+    }
+
+    static DateTime lastTrayOpen = DateTime.MinValue;
+    static int trayIconId;
+
+    /// Claude for Windows only checks usage by itself while its tray menu was opened in the last 24
+    /// hours ("poll requires tray open"), so with nobody at the PC its saved reading goes stale.
+    /// This opens Claude's tray menu for a moment (the message Windows sends Claude when its tray
+    /// icon is right-clicked, so the mouse doesn't move) and closes it again with Escape sent to the
+    /// menu itself. Only when the saved reading is over 20 minutes old, nobody has touched the PC
+    /// for a minute, the screen isn't locked, and at most every 30 minutes. True if it did.
+    public static bool KeepClaudeChecking(bool force = false)
+    {
+        if (!force)
+        {
+            var age = Wait.NowMs - (FileAt() ?? 0);
+            if (age < 20 * 60_000 || DateTime.UtcNow - lastTrayOpen < TimeSpan.FromMinutes(30)
+                || Automation.SecondsSinceInput() < 60 || Automation.ScreenLocked() || !Claude.Running) return false;
+        }
+        lastTrayOpen = DateTime.UtcNow;
+        var opened = Automation.OpenClaudeTrayMenu(ref trayIconId);
+        Log.Write(opened ? $"Opened and closed Claude's tray menu, so it checks usage again (icon {trayIconId})" : "Couldn't open Claude's tray menu");
+        return opened;
     }
 
     static double? FileAt()

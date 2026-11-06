@@ -160,6 +160,59 @@ static class Automation
         }
     }
 
+    // MARK: Claude's tray menu
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
+
+    static List<IntPtr> ClaudeWindows(Func<string, string, bool> match)
+    {
+        var pids = new HashSet<uint>(Claude.Processes().Select(p => { var id = (uint)p.Id; p.Dispose(); return id; }));
+        var found = new List<IntPtr>();
+        var cls = new System.Text.StringBuilder(128); var title = new System.Text.StringBuilder(128);
+        Native.EnumWindows((h, _) =>
+        {
+            Native.GetWindowThreadProcessId(h, out var pid);
+            if (!pids.Contains(pid)) return true;
+            cls.Clear(); title.Clear();
+            GetClassName(h, cls, 128); GetWindowText(h, title, 128);
+            if (match(cls.ToString(), title.ToString())) found.Add(h);
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    /// Claude's tray menu: a small window of its own, shown only while the menu is open.
+    static IntPtr OpenTrayMenu() =>
+        ClaudeWindows((cls, title) => cls == "Chrome_WidgetWin_1" && title.Length == 0).FirstOrDefault(Native.IsWindowVisible);
+
+    /// Opens Claude's tray menu with the message its tray icon gets on a right-click, then closes it
+    /// with Escape posted to the menu's own window (never a key press anywhere else). Puts the
+    /// window that was in front back in front. `iconId` remembers which icon number is Claude's.
+    public static bool OpenClaudeTrayMenu(ref int iconId)
+    {
+        var host = ClaudeWindows((cls, _) => cls.Contains("NotifyIcon")).FirstOrDefault();
+        if (host == IntPtr.Zero || OpenTrayMenu() != IntPtr.Zero) return false;
+        var front = Native.GetForegroundWindow();
+        const uint TrayMessage = Native.WM_APP + 1, WM_RBUTTONDOWN = 0x0204, WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101;
+        var known = iconId;
+        var ids = known > 0 ? new[] { known }.Concat(Enumerable.Range(1, 8).Where(i => i != known)) : Enumerable.Range(1, 8);
+        foreach (var id in ids)
+        {
+            Native.PostMessage(host, TrayMessage, (IntPtr)id, (IntPtr)WM_RBUTTONDOWN);
+            IntPtr menu = IntPtr.Zero;
+            if (!Wait.Poll(1.2, () => (menu = OpenTrayMenu()) != IntPtr.Zero, 0.1)) continue;
+            iconId = id;
+            Thread.Sleep(400);
+            Native.PostMessage(menu, WM_KEYDOWN, (IntPtr)Native.VK_ESCAPE, (IntPtr)0x00010001);
+            Native.PostMessage(menu, WM_KEYUP, (IntPtr)Native.VK_ESCAPE, unchecked((IntPtr)0xC0010001));
+            Wait.Poll(2, () => !Native.IsWindowVisible(menu), 0.1);
+            if (front != IntPtr.Zero && Native.IsWindow(front)) Native.SetForegroundWindow(front);
+            return true;
+        }
+        return false;
+    }
+
     // MARK: Quitting Claude
 
     const int MenuItemType = 50011, InvokePattern = 10000;
