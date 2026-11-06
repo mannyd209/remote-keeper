@@ -2,3 +2,7 @@ mac/build/
 dist/
 graphify-out/
 .DS_Store
+windows/bin/
+windows/obj/
+windows/build/
+windows/BuildConfig.cs

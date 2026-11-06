@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Remote Keeper for Windows. Build with ./build.sh (Mac or Windows with bash), which publishes a
+       single self-contained RemoteKeeper.exe for win-arm64 and win-x64 into build/. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>RemoteKeeper</AssemblyName>
+    <RootNamespace>RemoteKeeper</RootNamespace>
+    <Version>0.1.0</Version>
+    <Company>MannyD Labs</Company>
+    <Product>Remote Keeper</Product>
+    <Description>Remote Keeper for Claude Code</Description>
+    <Copyright>© MannyD Labs</Copyright>
+    <ApplicationIcon>Resources\RemoteKeeper.ico</ApplicationIcon>
+    <ApplicationManifest>Resources\app.manifest</ApplicationManifest>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- One small file: self-contained, trimmed and compressed (about 11 MB). -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <DebugType>none</DebugType>
+    <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- UI Automation's COM interfaces: kept whole, since trimming them breaks their method order. -->
+    <TrimmerRootAssembly Include="Interop.UIAutomationClient" />
+    <TrimmerRootAssembly Include="RemoteKeeper" />
+    <PackageReference Include="Interop.UIAutomationClient" Version="10.19041.0" />
+    <PackageReference Include="QRCoder" Version="1.6.0" />
+  </ItemGroup>
+</Project>
