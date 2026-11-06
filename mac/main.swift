@@ -13,7 +13,7 @@
 import AppKit
 import Foundation
 
-let keeperVersion = "0.3.13"
+let keeperVersion = "0.3.14"
 
 let args = Array(CommandLine.arguments.dropFirst()).filter { !$0.hasPrefix("-NS") && !$0.hasPrefix("-Apple") }
 switch args.first ?? "" {
@@ -51,6 +51,9 @@ case "usage":
     if args.contains("--refresh") {
         print(nudgeClaudeUsage(force: true) ? "Asked Claude for fresh usage" : "Couldn't reach Claude's menu-bar icon")
         Thread.sleep(forTimeInterval: 4)
+    }
+    if args.contains("--popup") {
+        print(PopupUsage.refresh(force: true) ? "Read Claude's usage popup" : "Couldn't read Claude's usage popup")
     }
     print(planUsage().map { "\($0)" } ?? "No usage reading")
 case "version":

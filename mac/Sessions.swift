@@ -268,6 +268,16 @@ func planUsage() -> [String: Any]? {
         if let menu = TrayUsage.latest, now - menu.at < 6 * 3_600_000 {
             menu.correct(&resets, limits: &shown, labels: &labels, now: now, firstMessage: firstClaudeMessage(after:))
         }
+        // Claude's usage popup gives the exact reset times (the menu rounds them): they win while
+        // they're still ahead, and its percents count when they're newer than the file's.
+        if let popup = PopupUsage.latest, now - popup.at < 24 * 3_600_000 {
+            for row in popup.rows {
+                let key = TrayUsage.keys[row.label] ?? labels.first(where: { $0.value == row.label })?.key
+                guard let key else { continue }
+                if popup.at > at - 60_000 { shown[key] = row.percent }
+                if let reset = row.resetAt, reset > now { resets[key] = reset }
+            }
+        }
         var result: [String: Any] = ["at": Int(at), "limits": shown, "resets": resets.mapValues { Int($0) }]
         if !labels.isEmpty { result["labels"] = labels }
         return result
@@ -574,6 +584,141 @@ func claudeUpdateReady() -> String? {
         }
         guard let ready, ready != claudeVersion() else { return nil }
         return ready
+    }
+}
+
+// MARK: - Claude's usage popup (exact reset times)
+
+/// What Claude's usage popup (the button under the message box) showed: each limit's name, percent
+/// used and exact reset time ("Resets at 10:40 PM", "Resets Wed 6:00 PM"). The menu-bar menu only
+/// shows rounded times ("Resets 2h"), so these fix the estimates.
+struct PopupUsage: Codable {
+    struct Row: Codable { let label: String; let percent: Double; let resetAt: Double? }  // ms since 1970
+    let at: Double
+    let rows: [Row]
+
+    static var latest: PopupUsage? = load() {
+        didSet {
+            guard let latest, let data = try? JSONEncoder().encode(latest) else { return }
+            try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
+            try? data.write(to: file, options: .atomic)
+        }
+    }
+    private static let file = supportDir.appendingPathComponent("claude-usage-popup.json")
+    private static func load() -> PopupUsage? { (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(PopupUsage.self, from: $0) } }
+
+    /// Whether it's worth opening the popup again: no reading, an old one, or a reset has passed.
+    static var stale: Bool {
+        guard let latest else { return true }
+        let now = Date().timeIntervalSince1970 * 1000
+        return now - latest.at > 60 * 60_000 || latest.rows.contains { ($0.resetAt ?? .infinity) < now }
+    }
+
+    /// "Resets at 10:40 PM", "Resets Wed 6:00 PM", "Resets Nov 12 at 6:00 PM", "Resets in 3 hr 20 min".
+    static func parseReset(_ text: String, now: Date = Date()) -> Double? {
+        var t = text.trimmingCharacters(in: .whitespaces)
+        for prefix in ["Resets", "at ", "in "] where t.lowercased().hasPrefix(prefix.lowercased()) {
+            t = String(t.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+        }
+        let cal = Calendar.current
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        func ms(_ d: Date) -> Double { d.timeIntervalSince1970 * 1000 }
+        for format in ["h:mm a", "h a", "H:mm"] {
+            f.dateFormat = format
+            if let time = f.date(from: t) {
+                let c = cal.dateComponents([.hour, .minute], from: time)
+                guard var d = cal.date(bySettingHour: c.hour ?? 0, minute: c.minute ?? 0, second: 0, of: now) else { continue }
+                if d <= now { d = cal.date(byAdding: .day, value: 1, to: d) ?? d }
+                return ms(d)
+            }
+        }
+        let days = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+        let parts = t.split(separator: " ", maxSplits: 1).map(String.init)
+        if parts.count == 2, let day = days.firstIndex(where: { parts[0].lowercased().hasPrefix($0) }) {
+            var rest = parts[1]
+            if rest.lowercased().hasPrefix("at ") { rest = String(rest.dropFirst(3)) }
+            for format in ["h:mm a", "h a", "H:mm"] {
+                f.dateFormat = format
+                if let time = f.date(from: rest) {
+                    let c = cal.dateComponents([.hour, .minute], from: time)
+                    if let d = cal.nextDate(after: now, matching: DateComponents(hour: c.hour, minute: c.minute, weekday: day + 1), matchingPolicy: .nextTime) { return ms(d) }
+                }
+            }
+        }
+        f.dateFormat = "MMM d h:mm a"
+        if let d = f.date(from: t.replacingOccurrences(of: " at ", with: " ")) {
+            var c = cal.dateComponents([.month, .day, .hour, .minute], from: d); c.year = cal.component(.year, from: now)
+            if let date = cal.date(from: c) { return ms(date < now.addingTimeInterval(-86_400) ? cal.date(byAdding: .year, value: 1, to: date) ?? date : date) }
+        }
+        var total = 0.0
+        let scanner = Scanner(string: t.lowercased())
+        while !scanner.isAtEnd {
+            guard let n = scanner.scanDouble() else { _ = scanner.scanCharacter(); continue }
+            let unit = scanner.scanCharacters(from: .letters) ?? ""
+            total += n * (unit.hasPrefix("d") ? 86_400_000 : unit.hasPrefix("h") ? 3_600_000 : unit.hasPrefix("m") ? 60_000 : 0)
+        }
+        return total > 0 ? ms(now) + total : nil
+    }
+
+    /// Opens Claude's usage popup through Accessibility (a press on its button; nothing typed),
+    /// reads it, closes it, and puts the keyboard focus back. Only when the reading is stale (or
+    /// `force`), nobody has touched the Mac for a minute and the screen isn't locked.
+    @discardableResult
+    static func refresh(force: Bool = false) -> Bool {
+        guard let claude = claudeApp(), !screenLocked() else { return false }
+        if !force { guard stale, secondsSinceInput() >= 60 else { return false } }
+        let pid = claude.processIdentifier
+        func string(_ e: AXUIElement, _ a: String) -> String? {
+            var v: CFTypeRef?; AXUIElementCopyAttributeValue(e, a as CFString, &v); return (v as? String).flatMap { $0.isEmpty ? nil : $0 }
+        }
+        func walk(_ e: AXUIElement, _ depth: Int, _ visit: (AXUIElement) -> Bool) -> Bool {
+            guard depth < 60 else { return false }
+            if visit(e) { return true }
+            for child in axChildren(e) ?? [] where walk(child, depth + 1, visit) { return true }
+            return false
+        }
+        var button: AXUIElement?
+        for window in claudeWindows(pid) where button == nil {
+            _ = walk(window, 0) { e in
+                if string(e, kAXRoleAttribute) == "AXPopUpButton", (string(e, kAXDescriptionAttribute) ?? "").hasPrefix("Usage:") { button = e; return true }
+                return false
+            }
+        }
+        guard let button else { return false }
+        let app = AXUIElementCreateApplication(pid)
+        var focused: CFTypeRef?
+        AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused)
+        guard AXUIElementPerformAction(button, kAXPressAction as CFString) == .success else { return false }
+        defer {
+            AXUIElementPerformAction(button, kAXPressAction as CFString)
+            usleep(200_000)
+            if let focused { AXUIElementSetAttributeValue(focused as! AXUIElement, kAXFocusedAttribute as CFString, kCFBooleanTrue) }
+        }
+        // The popup's rows, in order: the limit's name, "Resets …", then its level indicator.
+        var rows: [Row] = []
+        _ = poll(seconds: 2, every: 0.2) {
+            rows = []
+            var resets: [String] = []
+            for window in claudeWindows(pid) {
+                _ = walk(window, 0) { e in
+                    let role = string(e, kAXRoleAttribute)
+                    if role == "AXStaticText", let text = string(e, kAXValueAttribute) ?? string(e, kAXTitleAttribute), text.lowercased().hasPrefix("resets") { resets.append(text) }
+                    if role == "AXLevelIndicator" || role == "AXProgressIndicator", let label = string(e, kAXDescriptionAttribute) ?? string(e, kAXTitleAttribute) {
+                        var v: CFTypeRef?; AXUIElementCopyAttributeValue(e, kAXValueAttribute as CFString, &v)
+                        let percent = (v as? NSNumber)?.doubleValue ?? 0
+                        rows.append(Row(label: label, percent: percent, resetAt: resets.last.flatMap { parseReset($0) }))
+                        resets = []
+                    }
+                    return false
+                }
+            }
+            return !rows.isEmpty
+        }
+        guard !rows.isEmpty else { log("Couldn't read Claude's usage popup"); return false }
+        latest = PopupUsage(at: Date().timeIntervalSince1970 * 1000, rows: rows)
+        log("Claude's usage popup: " + rows.map { "\($0.label) \(Int($0.percent))%" + ($0.resetAt.map { " resets \(Date(timeIntervalSince1970: $0 / 1000))" } ?? "") }.joined(separator: ", "))
+        return true
     }
 }
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.14
+
+- Exact reset times: Claude's menu-bar menu only shows rounded times ("Resets 2h"), so the 5-hour reset on your phone could be off by 20 minutes or more. Remote Keeper now also reads Claude's usage popup (the Usage button under the message box), which shows the exact times ("Resets at 10:40 PM", "Resets Wed 6:00 PM"), opening and closing it through Accessibility. Same rules as the menu: only when you open or refresh the iPhone app, the reading is missing, over an hour old or past a reset, and nobody has used the Mac for a minute. Your keyboard focus goes back where it was. The last reading is saved (claude-usage-popup.json in Remote Keeper's folder).
+
 ## 0.3.13
 
 - Reconnects with Claude's own Remote Control switch: Claude 4.23 and later show a Remote Control switch next to each session's message box. For a session Claude is running, Remote Keeper now presses that switch instead of typing /remote-control (under a second). Sessions Claude hasn't started since it opened can't take the switch, so they still get the one short wake message (about a second and a half). Older Claude versions get /remote-control typed, as before.

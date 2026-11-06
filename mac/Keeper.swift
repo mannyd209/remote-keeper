@@ -164,7 +164,10 @@ final class Keeper {
             // The phone opened or refreshed: if Claude's usage reading is stale because nobody is
             // at the Mac, ask Claude for a fresh one (in line with wakes, never during one).
             // The menu's reset times arrive even when Claude saves no new reading, so send again.
-            wakeQueue.async { if nudgeClaudeUsage() { self.sendState() } }
+            wakeQueue.async {
+                let menu = nudgeClaudeUsage()
+                if PopupUsage.refresh() || menu { self.sendState() }
+            }
         case "update":
             // From the phone's Update button: installs the latest GitHub release, and only if it's
             // signed by MannyD Labs and notarized (see Updater.swift).
