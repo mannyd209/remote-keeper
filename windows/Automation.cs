@@ -113,6 +113,53 @@ static class Automation
         catch (Exception e) { Log.Write("Couldn't press the switch: " + e.Message); return false; }
     }
 
+    // MARK: Claude's usage popup
+
+    const int ProgressBarType = 50012, TextType = 50020, RangeValuePattern = 10003, ExpandCollapsePattern = 10005;
+
+    /// Opens the usage button under Claude's message box ("Usage: Weekly · all models: 22%, …"),
+    /// reads each limit (name, percent used, "Resets at 10:40 PM"), and closes it again.
+    /// Null when there's no usage button (no session or new-session page shown).
+    public static List<(string label, double percent, string? reset)>? ReadUsagePopup(IntPtr hWnd)
+    {
+        var button = Find(hWnd, e => e.CurrentControlType == ButtonType && (e.CurrentName ?? "").StartsWith("Usage:")).FirstOrDefault();
+        if (button == null || button.GetCurrentPattern(ExpandCollapsePattern) is not IUIAutomationExpandCollapsePattern expander) return null;
+        var opened = false;
+        try
+        {
+            if (expander.CurrentExpandCollapseState != ExpandCollapseState.ExpandCollapseState_Expanded) { expander.Expand(); opened = true; }
+            List<IUIAutomationElement> bars = new();
+            Wait.Poll(3, () => (bars = Find(hWnd, e => e.CurrentControlType == ProgressBarType && !string.IsNullOrEmpty(e.CurrentName), all: true)).Count > 0, 0.2);
+            if (bars.Count == 0) return null;
+            var texts = Find(hWnd, e => e.CurrentControlType == TextType && !string.IsNullOrEmpty(e.CurrentName), all: true)
+                .Select(e => (name: e.CurrentName.Trim(), rect: e.CurrentBoundingRectangle)).ToList();
+            var rows = new List<(string, double, string?)>();
+            foreach (var bar in bars)
+            {
+                var label = bar.CurrentName.Trim();
+                double percent;
+                try
+                {
+                    var range = (IUIAutomationRangeValuePattern)bar.GetCurrentPattern(RangeValuePattern);
+                    percent = range.CurrentMaximum > 0 ? range.CurrentValue / range.CurrentMaximum * 100 : range.CurrentValue;
+                }
+                catch { continue; }
+                // The reset text sits on the label's row, above the bar.
+                var labelRow = texts.FirstOrDefault(t => t.name == label);
+                var reset = labelRow.name == null ? null
+                    : texts.Where(t => t.name.StartsWith("Resets", StringComparison.OrdinalIgnoreCase) && Math.Abs(t.rect.top - labelRow.rect.top) < 12)
+                        .Select(t => t.name).FirstOrDefault();
+                rows.Add((label, Math.Round(percent, 1), reset));
+            }
+            return rows.Count > 0 ? rows : null;
+        }
+        catch (Exception e) { Log.Write("Usage popup: " + e.Message); return null; }
+        finally
+        {
+            if (opened) { try { expander.Collapse(); } catch { } }
+        }
+    }
+
     // MARK: The message box
 
     /// Claude's message box (the Edit named "Prompt"); the lowest one if there are several.

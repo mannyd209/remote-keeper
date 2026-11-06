@@ -527,13 +527,173 @@ static class Usage
             if (readings.Count == 0 || readings[^1].u.Count == 0) return null;
             var last = readings[^1];
             var resets = EstimateResets(readings, Wait.NowMs, FirstClaudeMessage);
+            var shown = new Dictionary<string, double>(last.u);
+            var labels = new Dictionary<string, string>();
+            var at = last.t;
+            // Claude's own usage popup, read live (see Refresh): newer numbers and exact reset times.
+            if (LiveReading is { } live && live.at > last.t - 60_000 && Wait.NowMs - live.at < 6 * 3_600_000)
+            {
+                at = Math.Max(at, live.at);
+                for (var i = 0; i < live.rows.Count; i++)
+                {
+                    var row = live.rows[i];
+                    var key = Keys.TryGetValue(row.label, out var k) ? k : $"m{i}";
+                    if (!Keys.ContainsKey(row.label)) labels[key] = row.label;
+                    shown[key] = row.percent;
+                    if (row.resetAt is double r && r > Wait.NowMs) resets[key] = r;
+                }
+            }
             var limits = new JsonObject();
-            foreach (var (k, v) in last.u) limits[k] = v;
-            var r = new JsonObject();
-            foreach (var (k, v) in resets) r[k] = (long)v;
-            return new JsonObject { ["at"] = (long)last.t, ["limits"] = limits, ["resets"] = r };
+            foreach (var (k, v) in shown) limits[k] = v;
+            var resetsJson = new JsonObject();
+            foreach (var (k, v) in resets) resetsJson[k] = (long)v;
+            var result = new JsonObject { ["at"] = (long)at, ["limits"] = limits, ["resets"] = resetsJson };
+            if (labels.Count > 0)
+            {
+                var l = new JsonObject();
+                foreach (var (k, v) in labels) l[k] = v;
+                result["labels"] = l;
+            }
+            return result;
         }
         catch { return null; }
+    }
+
+    /// The keys the usage file uses for the limits Claude's popup shows.
+    static readonly Dictionary<string, string> Keys = new()
+    {
+        ["5-hour limit"] = "fh", ["Weekly · all models"] = "sd", ["Weekly · Opus"] = "so", ["Weekly · Sonnet"] = "sn",
+    };
+
+    public sealed record Row(string label, double percent, double? resetAt);
+    public sealed record Reading(double at, List<Row> rows);
+
+    static readonly string LiveFile = Path.Combine(App.SupportDir, "claude-usage-popup.json");
+    static Reading? liveReading;
+    static bool liveLoaded;
+
+    /// The newest reading of Claude's usage popup. Saved, so a restart of Remote Keeper keeps it.
+    public static Reading? LiveReading
+    {
+        get
+        {
+            if (!liveLoaded)
+            {
+                liveLoaded = true;
+                try
+                {
+                    if (JsonNode.Parse(File.ReadAllText(LiveFile)) is JsonObject o && o["rows"] is JsonArray rows)
+                        liveReading = new Reading(Json.Double(o["at"]) ?? 0, rows.Select(r => new Row(Json.Str(r?["label"]), Json.Double(r?["percent"]) ?? 0, Json.Double(r?["resetAt"]))).ToList());
+                }
+                catch { }
+            }
+            return liveReading;
+        }
+        set
+        {
+            liveReading = value;
+            liveLoaded = true;
+            if (value == null) return;
+            try
+            {
+                var rows = new JsonArray();
+                foreach (var r in value.rows) rows.Add(new JsonObject { ["label"] = r.label, ["percent"] = r.percent, ["resetAt"] = r.resetAt });
+                Directory.CreateDirectory(App.SupportDir);
+                File.WriteAllText(LiveFile, new JsonObject { ["at"] = value.at, ["rows"] = rows }.ToJsonString());
+            }
+            catch { }
+        }
+    }
+
+    static DateTime lastRefresh = DateTime.MinValue;
+
+    /// Claude for Windows stops checking usage by itself when nobody opens its tray menu, so a phone
+    /// away from the PC sees an old reading, without reset times. This reads Claude's usage popup
+    /// instead (which shows current numbers and exact resets): it opens and closes it through UI
+    /// Automation, nothing typed or clicked. Only when the reading is over 10 minutes old, nobody
+    /// has touched the PC for a minute, the screen isn't locked, Claude's window is showing, and at
+    /// most every 5 minutes. True when it got a new reading.
+    public static bool Refresh(bool force = false)
+    {
+        if (Automation.ScreenLocked()) return false;
+        if (!force)
+        {
+            var age = Wait.NowMs - Math.Max(LiveReading?.at ?? 0, FileAt() ?? 0);
+            if (age < 10 * 60_000 || Automation.SecondsSinceInput() < 60 || DateTime.UtcNow - lastRefresh < TimeSpan.FromMinutes(5)) return false;
+        }
+        var hWnd = Claude.MainWindow();
+        if (hWnd == IntPtr.Zero || !Native.IsWindowVisible(hWnd) || Native.IsIconic(hWnd)) return false;
+        lastRefresh = DateTime.UtcNow;
+        Automation.EnableAccessibility(hWnd);
+        Automation.WaitForTree(hWnd, 5);
+        var rows = Automation.ReadUsagePopup(hWnd);
+        if (rows == null) { Log.Write("Couldn't read Claude's usage popup"); return false; }
+        var now = DateTime.Now;
+        LiveReading = new Reading(Wait.NowMs, rows.Select(r => new Row(r.label, r.percent, r.reset == null ? null : ParseReset(r.reset, now))).ToList());
+        Log.Write("Claude's usage: " + string.Join(", ", rows.Select(r => $"{r.label} {r.percent:0}%" + (r.reset != null ? $" ({r.reset})" : ""))));
+        return true;
+    }
+
+    static double? FileAt()
+    {
+        try
+        {
+            using var stream = new FileStream(Claude.PlanUsageFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return JsonNode.Parse(stream)?["samples"] is JsonArray s && s.Count > 0 ? Json.Double(s[^1]?["t"]) : null;
+        }
+        catch { return null; }
+    }
+
+    /// "Resets at 10:40 PM", "Resets Wed 6:00 PM", "Resets Nov 12 at 6:00 PM", "Resets in 3 hr 20 min",
+    /// "Resets 4h" → the reset time (ms since 1970), or null.
+    public static double? ParseReset(string text, DateTime now)
+    {
+        var t = text.Trim();
+        if (t.StartsWith("Resets", StringComparison.OrdinalIgnoreCase)) t = t[6..].Trim();
+        if (t.StartsWith("at ", StringComparison.OrdinalIgnoreCase)) t = t[3..].Trim();
+        if (t.StartsWith("in ", StringComparison.OrdinalIgnoreCase)) t = t[3..].Trim();
+        double Ms(DateTime d) => new DateTimeOffset(d).ToUnixTimeMilliseconds();
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        // A time today ("10:40 PM"): the next time it comes around.
+        if (DateTime.TryParseExact(t, new[] { "h:mm tt", "h tt", "htt", "h:mmtt", "H:mm" }, culture, System.Globalization.DateTimeStyles.None, out var time))
+        {
+            var d = now.Date + time.TimeOfDay;
+            if (d <= now) d = d.AddDays(1);
+            return Ms(d);
+        }
+        // A weekday and time ("Wed 6:00 PM").
+        var parts = t.Split(' ', 2);
+        var days = new[] { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+        var day = Array.FindIndex(days, x => parts[0].StartsWith(x, StringComparison.OrdinalIgnoreCase));
+        if (day >= 0 && parts.Length == 2)
+        {
+            var rest = parts[1].Trim();
+            if (rest.StartsWith("at ", StringComparison.OrdinalIgnoreCase)) rest = rest[3..];
+            if (DateTime.TryParseExact(rest, new[] { "h:mm tt", "h tt", "H:mm" }, culture, System.Globalization.DateTimeStyles.None, out var at))
+            {
+                var d = now.Date.AddDays(((day - (int)now.DayOfWeek) + 7) % 7) + at.TimeOfDay;
+                if (d <= now) d = d.AddDays(7);
+                return Ms(d);
+            }
+        }
+        // A date ("Nov 12", "Nov 12 at 6:00 PM").
+        var dateText = t.Replace(" at ", " ");
+        if (DateTime.TryParseExact(dateText, new[] { "MMM d h:mm tt", "MMM d", "MMM d, h:mm tt" }, culture, System.Globalization.DateTimeStyles.None, out var date))
+        {
+            var d = new DateTime(now.Year, date.Month, date.Day) + date.TimeOfDay;
+            if (d < now.AddDays(-1)) d = d.AddYears(1);
+            return Ms(d);
+        }
+        // A time from now ("3 hr 20 min", "4h", "45m", "6d").
+        double total = 0; var any = false;
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(t, @"(\d+(?:\.\d+)?)\s*(d|day|days|h|hr|hrs|hour|hours|m|min|mins|minute|minutes)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        {
+            var n = double.Parse(m.Groups[1].Value, culture);
+            var unit = m.Groups[2].Value.ToLowerInvariant();
+            total += n * (unit.StartsWith('d') ? 86_400_000 : unit.StartsWith('h') ? 3_600_000 : 60_000);
+            any = true;
+        }
+        return any ? Ms(now) + total : null;
     }
 
     /// When the 5-hour and weekly limits reset next (ms since 1970), from Claude's readings. Same

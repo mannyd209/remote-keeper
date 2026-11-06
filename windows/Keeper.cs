@@ -102,6 +102,9 @@ sealed class Keeper
         {
             case "hello":
                 SendState();
+                // The phone opened or refreshed: if Claude's usage reading is stale because nobody is
+                // at the PC, read Claude's usage popup (in line with wakes, never during one).
+                wakeQueue.Run(() => { if (Usage.Refresh()) SendState(); });
                 break;
             case "update":
                 // From the phone's Update button: installs the latest release (see Updater.cs).
@@ -144,6 +147,7 @@ sealed class Keeper
             {
                 var live = Claude.LiveSessions().Select(s => s.Id).ToHashSet();
                 var chosen = Store.Watched.ToHashSet();
+                Log.Write($"Phone asked to reconnect {Ids().Count} session(s)");
                 EnqueueWake(Ids().Where(id => live.Contains(id) && chosen.Contains(id) && !waking.Contains(id)).Take(MaxBatch).ToList());
                 break;
             }

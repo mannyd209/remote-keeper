@@ -9,7 +9,7 @@ namespace RemoteKeeper;
 
 static class App
 {
-    public const string Version = "0.1.0";
+    public const string Version = "0.4.0";   // one version line with the Mac app (the iPhone app enables features by version)
     public static readonly string SupportDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Remote Keeper");
     public static readonly string InstallDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Remote Keeper");
     public static readonly string InstalledExe = Path.Combine(InstallDir, "RemoteKeeper.exe");

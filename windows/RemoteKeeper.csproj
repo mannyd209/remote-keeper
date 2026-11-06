@@ -9,7 +9,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>RemoteKeeper</AssemblyName>
     <RootNamespace>RemoteKeeper</RootNamespace>
-    <Version>0.1.0</Version>
+    <Version>0.4.0</Version>
     <Company>MannyD Labs</Company>
     <Product>Remote Keeper</Product>
     <Description>Remote Keeper for Claude Code</Description>
