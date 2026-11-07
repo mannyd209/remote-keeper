@@ -15,7 +15,7 @@
   &nbsp;
   <a href="https://apps.apple.com/us/app/remote-keeper-for-claude-code/id6829386828"><img src="docs/app-store-badge.svg" alt="Download on the App Store" height="44"></a>
   &nbsp;
-  <img src="https://img.shields.io/badge/Windows-coming%20soon-555555?style=for-the-badge&logo=windows&logoColor=white" alt="Windows: coming soon" height="44">
+  <a href="https://mannydlabs.com/download/remote-keeper-windows"><img src="https://img.shields.io/badge/Download%20for%20Windows-0067B8?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" height="44"></a>
   &nbsp;
   <a href="https://ko-fi.com/mannydlabs"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-FFDD00?style=for-the-badge&labelColor=1a1a1a" alt="Buy me a coffee" height="44"></a>
 </p>
@@ -60,19 +60,19 @@ When you tap **Reconnect** on your phone, Remote Keeper opens that session in th
 
 ## iPhone app
 
-The native iPhone app is [free on the App Store](https://apps.apple.com/us/app/remote-keeper-for-claude-code/id6829386828): no session limit, a **Reconnect** button right in the notification, one tap to jump into any session in the Claude app, your Claude usage with reset times, Claude updates you install on your terms, Home Screen and Lock Screen widgets, Siri and Shortcuts, Face ID lock, new sessions that show up on their own, and your computers synced with iCloud. It works with the same Mac app.
+The native iPhone app is [free on the App Store](https://apps.apple.com/us/app/remote-keeper-for-claude-code/id6829386828): no session limit, a **Reconnect** button right in the notification, one tap to jump into any session in the Claude app, your Claude usage with reset times, Claude updates you install on your terms, Home Screen and Lock Screen widgets, Siri and Shortcuts, Face ID lock, new sessions that show up on their own, and your computers synced with iCloud. It works with the same Mac and Windows apps.
 
 <p align="center">
   <img src="docs/screenshots/iphone/01-reconnect.jpg" alt="iPhone app: offline sessions with one Reconnect button" width="160">
-  <img src="docs/screenshots/iphone/02-usage.jpg" alt="iPhone app: your Claude usage with reset times" width="160">
-  <img src="docs/screenshots/iphone/03-jump.jpg" alt="iPhone app: jump into any session in the Claude app" width="160">
-  <img src="docs/screenshots/iphone/04-updates.jpg" alt="iPhone app: Claude updates on your terms" width="160">
-  <img src="docs/screenshots/iphone/05-new.jpg" alt="iPhone app: new sessions show up, with one tap to add them" width="160">
+  <img src="docs/screenshots/iphone/02-windows.jpg" alt="iPhone app: Mac or Windows PC, one app for both" width="160">
+  <img src="docs/screenshots/iphone/03-usage.jpg" alt="iPhone app: your Claude usage with reset times" width="160">
+  <img src="docs/screenshots/iphone/04-jump.jpg" alt="iPhone app: jump into any session in the Claude app" width="160">
+  <img src="docs/screenshots/iphone/05-updates.jpg" alt="iPhone app: Claude updates on your terms" width="160">
 </p>
 <p align="center">
-  <img src="docs/screenshots/iphone/06-alert.jpg" alt="iPhone app: Reconnect right from the alert" width="160">
-  <img src="docs/screenshots/iphone/07-reorder.jpg" alt="iPhone app: put your sessions in order" width="160">
-  <img src="docs/screenshots/iphone/08-choose.jpg" alt="iPhone app: choose any sessions on every Mac" width="160">
+  <img src="docs/screenshots/iphone/06-new.jpg" alt="iPhone app: new sessions show up, with one tap to add them" width="160">
+  <img src="docs/screenshots/iphone/07-alert.jpg" alt="iPhone app: Reconnect right from the alert" width="160">
+  <img src="docs/screenshots/iphone/08-reorder.jpg" alt="iPhone app: put your sessions in order" width="160">
   <img src="docs/screenshots/iphone/09-widgets.jpg" alt="iPhone app: widgets and Siri" width="160">
   <img src="docs/screenshots/iphone/10-private.jpg" alt="iPhone app: no account, locked with Face ID" width="160">
 </p>
@@ -96,9 +96,13 @@ To add another Mac, install Remote Keeper on it, then tap **＋** in the app on 
 
 **Updates:** Remote Keeper checks this page's releases and offers **Update** in its menu. It only installs an update that's signed by MannyD Labs and notarized by Apple.
 
-### Windows (coming soon)
+### Windows
 
-Remote Keeper for Windows is in testing, and its source is in [`windows/`](windows/). It's a small tray app (one `.exe` for Arm64 or x64 PCs, no installer or admin rights) that does what the Mac app does: it watches your Claude Code sessions in the Claude app for Windows, alerts your phone when Remote Control goes off, and turns it back on with the session's own Remote Control switch (or `/remote-control`, or one short message for a session Claude hasn't started). It also reads your Claude usage, restarts Claude from your phone, and works with the same phone app and relay. Downloads will appear on this page's releases.
+1. **[Download Remote Keeper for Windows](https://mannydlabs.com/download/remote-keeper-windows)** (it picks the right file for your PC), or get it from [this page's releases](https://github.com/mannyd209/remote-keeper/releases/tag/v0.4.0): `Remote-Keeper-Windows-x64.exe` for most PCs, `Remote-Keeper-Windows-arm64.exe` for Arm PCs (Snapdragon).
+2. **Open it.** It isn't code-signed yet, so Windows SmartScreen may say "Windows protected your PC": choose **More info**, then **Run anyway**. It installs itself for your user only (no administrator rights), opens at login and lives in the tray.
+3. **Scan the QR code** it shows with the iPhone app (tap **＋**) or your phone's camera.
+
+It's a small tray app that does what the Mac app does, for the Claude app on Windows 10 and 11: it watches your Claude Code sessions, alerts your phone when Remote Control goes off, and turns it back on with the session's own Remote Control switch (or `/remote-control`, or one short message for a session Claude hasn't started). It also reads your Claude usage with reset times, restarts Claude from your phone (Install Now for Claude updates), and works with the same phone app and relay. Your PC has to be awake and unlocked to reconnect a session. To remove it: Settings → Apps → Remote Keeper → Uninstall. Source: [`windows/`](windows/).
 
 ## Privacy and security
 
@@ -120,7 +124,7 @@ Reconnecting with /remote-control uses no Claude usage. Only the fallback messag
 
 **What if my Mac goes offline?** If Remote Keeper on your Mac stops checking in for 5 minutes (not because the Mac went to sleep or you quit it), your phone gets an alert. And if macOS ever closes Remote Keeper, it restarts itself within seconds.
 
-**Windows?** Coming soon.
+**Windows?** Yes, Windows 10 and 11, Arm64 or x64: see [Windows](#windows).
 
 **What if a session is still replying when I tap Reconnect?** Remote Keeper never types into a session in the middle of a turn. It waits up to 2 minutes for the turn to finish (which often reconnects it by itself), then runs /remote-control. If it's still busy after that, nothing is typed and your phone tells you to try again once it's done.
 
