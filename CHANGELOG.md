@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.15
+
+- Fixes reconnecting right after Claude restarts or updates (including Install Now from your phone): every session could fail with "Claude's message box didn't get focus". Claude only describes what's in its window to other apps after it's asked, and it starts over each time it's asked. Remote Keeper asked on every check, several times a second, so a freshly started Claude never finished and no message box was found for as long as Remote Keeper kept looking. It now asks once per Claude start (and again only if nothing shows up for a while), and gives a freshly started Claude up to 45 seconds on the first look. Measured: the message box shows up about 2 to 4 seconds after asking once; with the old repeated asking it never did.
+- Quieter log: "no message box found yet" is written at most every 10 seconds while waiting, not on every check.
+
 ## 0.3.14
 
 - Exact reset times: Claude's menu-bar menu only shows rounded times ("Resets 2h"), so the 5-hour reset on your phone could be off by 20 minutes or more. Remote Keeper now also reads Claude's usage popup (the Usage button under the message box), which shows the exact times ("Resets at 10:40 PM", "Resets Wed 6:00 PM"), opening and closing it through Accessibility. Same rules as the menu: only when you open or refresh the iPhone app, the reading is missing, over an hour old or past a reset, and nobody has used the Mac for a minute. Your keyboard focus goes back where it was. The last reading is saved (claude-usage-popup.json in Remote Keeper's folder).

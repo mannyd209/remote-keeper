@@ -943,10 +943,86 @@ func bringClaudeForward(opening url: URL? = nil) {
     claudeApp()?.activate()
 }
 
+/// Claude is an Electron app: it only describes what's in its window (the message box, the
+/// buttons) to other apps after it's asked to, and it starts that work over every time it's asked.
+/// It takes a few seconds. Asking on every check, several times a second, meant a freshly started
+/// Claude never finished, so no message box was found for as long as Remote Keeper kept looking
+/// (every reconnect failed right after Claude restarted or updated). So: ask once per Claude
+/// process, and again only when nothing has shown up for a while (10 s, then 20, 40, 60).
+private enum ClaudeWindowAsk {
+    static let lock = NSLock()
+    static var pid: pid_t = 0
+    static var askedAt = Date.distantPast
+    static var wait: TimeInterval = 10
+    static var described = false   // a message box or switch has been seen in this Claude process
+    static var longWaitFailedAt = Date.distantPast
+    static var seenAt = Date.distantPast   // when something inside the window was last found
+}
+
+func askClaudeToDescribeItsWindow(_ pid: pid_t) {
+    ClaudeWindowAsk.lock.lock(); defer { ClaudeWindowAsk.lock.unlock() }
+    if ClaudeWindowAsk.pid != pid {
+        ClaudeWindowAsk.pid = pid
+        ClaudeWindowAsk.askedAt = .distantPast
+        ClaudeWindowAsk.wait = 10
+        ClaudeWindowAsk.described = false
+        ClaudeWindowAsk.longWaitFailedAt = .distantPast
+    }
+    guard Date().timeIntervalSince(ClaudeWindowAsk.askedAt) >= ClaudeWindowAsk.wait else { return }
+    if ClaudeWindowAsk.askedAt != .distantPast { ClaudeWindowAsk.wait = min(ClaudeWindowAsk.wait * 2, 60) }
+    ClaudeWindowAsk.askedAt = Date()
+    AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), "AXManualAccessibility" as CFString, kCFBooleanTrue)
+}
+
+/// Something inside Claude's window was found, so it's describing its window: go back to the
+/// short wait in case it ever stops.
+func noteClaudeWindowDescribed(_ pid: pid_t) {
+    ClaudeWindowAsk.lock.lock(); defer { ClaudeWindowAsk.lock.unlock() }
+    guard ClaudeWindowAsk.pid == pid else { return }
+    ClaudeWindowAsk.described = true
+    ClaudeWindowAsk.seenAt = Date()
+    ClaudeWindowAsk.wait = 10
+    // Asking again while it's already describing its window changes nothing, but there's no need.
+    ClaudeWindowAsk.askedAt = Date()
+}
+
+/// Whether this Claude process has shown what's in its window (it hasn't right after it starts),
+/// and with `since`, whether anything in it was found after that moment.
+func claudeWindowDescribed(_ pid: pid_t, since: Date? = nil) -> Bool {
+    ClaudeWindowAsk.lock.lock(); defer { ClaudeWindowAsk.lock.unlock() }
+    guard ClaudeWindowAsk.pid == pid, ClaudeWindowAsk.described else { return false }
+    return since.map { ClaudeWindowAsk.seenAt >= $0 } ?? true
+}
+
+/// Nothing was found in Claude's window although it showed things before: it may have stopped
+/// describing its window, so ask again right away and treat the next look as a first look.
+func claudeWindowWentBlank(_ pid: pid_t) {
+    ClaudeWindowAsk.lock.lock(); defer { ClaudeWindowAsk.lock.unlock() }
+    guard ClaudeWindowAsk.pid == pid else { return }
+    ClaudeWindowAsk.described = false
+    ClaudeWindowAsk.askedAt = .distantPast
+    ClaudeWindowAsk.wait = 10
+}
+
+/// Whether to give Claude's window the long wait: it hasn't shown anything yet, and a long wait
+/// didn't just fail (so a batch of sessions doesn't wait 45 seconds each for a window that
+/// stays blank, say behind something Claude is asking on screen).
+func claudeWindowDeservesLongWait(_ pid: pid_t) -> Bool {
+    ClaudeWindowAsk.lock.lock(); defer { ClaudeWindowAsk.lock.unlock() }
+    return ClaudeWindowAsk.pid == pid && !ClaudeWindowAsk.described && Date().timeIntervalSince(ClaudeWindowAsk.longWaitFailedAt) > 120
+}
+
+func noteLongWaitFailed(_ pid: pid_t) {
+    ClaudeWindowAsk.lock.lock(); defer { ClaudeWindowAsk.lock.unlock() }
+    ClaudeWindowAsk.longWaitFailedAt = Date()
+}
+
+private var lastNoBoxLog = Date.distantPast
+
 /// Claude's windows, the focused and main ones first.
 func claudeWindows(_ pid: pid_t) -> [AXUIElement] {
     let app = AXUIElementCreateApplication(pid)
-    AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    askClaudeToDescribeItsWindow(pid)
     var list: [AXUIElement] = []
     for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
         var value: CFTypeRef?
@@ -972,7 +1048,7 @@ func remoteControlSwitch(_ pid: pid_t) -> AXUIElement? {
         AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subrole)
         if subrole as? String == "AXSwitch" {
             AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title)
-            if title as? String == "Remote Control" { found = element; return }
+            if title as? String == "Remote Control" { found = element; noteClaudeWindowDescribed(pid); return }
         }
         var kids: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &kids) == .success,
@@ -1043,9 +1119,14 @@ func focusMessageBox(_ pid: pid_t) -> Bool {
     // the window Claude reports as focused isn't always the one showing the session).
     for root in windows where boxes.isEmpty { walk(root, depth: 0) }
     guard let box = boxes.max(by: { $0.1 < $1.1 })?.0 else {
-        log("Focus: no message box found in Claude's \(windows.count == 1 ? "window" : "\(windows.count) windows")")
+        // Checked several times a second while waiting: say it at most every 10 seconds.
+        if Date().timeIntervalSince(lastNoBoxLog) > 10 {
+            lastNoBoxLog = Date()
+            log("Focus: no message box found in Claude's \(windows.count == 1 ? "window" : "\(windows.count) windows") yet")
+        }
         return false
     }
+    noteClaudeWindowDescribed(pid)
     AXUIElementSetAttributeValue(box, kAXFocusedAttribute as CFString, kCFBooleanTrue)
     usleep(300_000)
     let ok = messageBoxFocused(pid)
@@ -1056,7 +1137,7 @@ func focusMessageBox(_ pid: pid_t) -> Bool {
 /// True when Claude's focused element is a text box (the session's message box).
 func messageBoxFocused(_ pid: pid_t) -> Bool {
     let app = AXUIElementCreateApplication(pid)
-    AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    askClaudeToDescribeItsWindow(pid)
     var focused: CFTypeRef?
     guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
           let element = focused else { return false }
@@ -1159,13 +1240,25 @@ func wake(_ id: String, dryRun: Bool = false, verifyLater: Bool = false) -> Resu
     if sessionStarted(id), pressRemoteControlSwitch(id, pid: pid, wait: 2) == true {
         return .success("\(target.title): Remote Control is back on.")
     }
-    // A session Claude only just loaded can take a while to show its message box.
+    // A session Claude only just loaded can take a while to show its message box, and a Claude
+    // that just started needs a few seconds before it shows anything in its window at all.
     var tries = 0
-    let focused = poll(seconds: sinceLaunch < 180 ? 15 : 5, every: 0.25) {
+    _ = claudeWindows(pid)   // asks Claude to describe its window, if it hasn't been asked yet
+    let firstLook = claudeWindowDeservesLongWait(pid)
+    if firstLook { log("Wake \(id): first look into this Claude; giving its window up to 45 seconds") }
+    let lookedFrom = Date()
+    var focused = poll(seconds: firstLook ? 45 : sinceLaunch < 180 ? 15 : 5, every: 0.25) {
         tries += 1
         if tries == 12 { bringClaudeForward() }
         return focusMessageBox(pid)
     }
+    if !focused, !firstLook, claudeWindowDescribed(pid), !claudeWindowDescribed(pid, since: lookedFrom) {
+        // It showed its window before and now nothing is found: ask again and give it time, once.
+        claudeWindowWentBlank(pid)
+        log("Wake \(id): Claude's window went blank; asking it again")
+        focused = poll(seconds: 30, every: 0.25) { focusMessageBox(pid) }
+    }
+    if !focused, !claudeWindowDescribed(pid) { noteLongWaitFailed(pid) }
     guard focused else {
         let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none"
         log("Wake \(id): no message box focus (front app: \(front), Claude active: \(app.isActive))")
