@@ -60,7 +60,7 @@ When you tap **Reconnect** on your phone, Remote Keeper opens that session in th
 
 ## iPhone app
 
-The native iPhone app is [free on the App Store](https://apps.apple.com/us/app/remote-keeper-for-claude-code/id6829386828): no session limit, a **Reconnect** button right in the notification, one tap to jump into any session in the Claude app, your Claude usage with reset times, Claude updates you install on your terms, Home Screen and Lock Screen widgets, Siri and Shortcuts, Face ID lock, new sessions that show up on their own, and your computers synced with iCloud. It works with the same Mac and Windows apps.
+The native iPhone app is [free on the App Store](https://apps.apple.com/us/app/remote-keeper-for-claude-code/id6829386828): no session limit, a **Reconnect** button right in the notification, one tap to jump into any session in the Claude app, your Claude usage with reset times, Claude updates you install on your terms, Home Screen and Lock Screen widgets, Siri and Shortcuts, Face ID lock, layouts made for iPhone Duo, new sessions that show up on their own, and your computers synced with iCloud. It works with the same Mac and Windows apps.
 
 <p align="center">
   <img src="docs/screenshots/iphone/01-reconnect.jpg" alt="iPhone app: offline sessions with one Reconnect button" width="160">
@@ -75,6 +75,17 @@ The native iPhone app is [free on the App Store](https://apps.apple.com/us/app/r
   <img src="docs/screenshots/iphone/08-reorder.jpg" alt="iPhone app: put your sessions in order" width="160">
   <img src="docs/screenshots/iphone/09-widgets.jpg" alt="iPhone app: widgets and Siri" width="160">
   <img src="docs/screenshots/iphone/10-private.jpg" alt="iPhone app: no account, locked with Face ID" width="160">
+</p>
+
+**Made for iPhone Duo** (version 1.5). Unfolded, all your computers are on one side of the fold and the sessions of the one you pick are on the other. Folded halfway, it stands up like a small laptop: your computer on top, your sessions under your thumbs. Closed, it's the same app on the cover screen.
+
+<p align="center">
+  <img src="docs/screenshots/iphone-duo/01-unfolded.jpg" alt="Unfolded iPhone Duo: every computer on one side of the fold, its sessions on the other" width="330">
+  <img src="docs/screenshots/iphone-duo/03-computers.jpg" alt="Unfolded iPhone Duo: tap a computer to see its sessions" width="330">
+</p>
+<p align="center">
+  <img src="docs/screenshots/iphone-duo/02-laptop.jpg" alt="iPhone Duo folded halfway like a small laptop" width="160">
+  <img src="docs/screenshots/iphone-duo/05-cover.jpg" alt="Closed iPhone Duo: Remote Keeper on the cover screen" width="160">
 </p>
 
 ## Install
